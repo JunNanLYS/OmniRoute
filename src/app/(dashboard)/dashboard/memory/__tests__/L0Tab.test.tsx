@@ -37,6 +37,7 @@ const sampleMessages = [
     truncated: false,
     idempotencyKey: "turn-1",
     deletedAt: null,
+    associatedL1Ids: ["unsupported-l1-id"],
   },
 ];
 const sampleBin = [
@@ -69,6 +70,18 @@ describe("L0Tab", () => {
       if ((!init || init.method === "GET") && value === "/api/memory/l0?includeDeleted=deleted") {
         return jsonResponse({ data: sampleBin });
       }
+      if ((!init || init.method === "GET") && value === "/api/memory/l0/status") {
+        return jsonResponse({
+          data: {
+            ownerApiKeyId: "owner-a",
+            successCount: 12,
+            failureCount: 2,
+            lastSuccessAt: "2026-08-13T00:00:00Z",
+            lastFailureAt: "2026-08-12T00:00:00Z",
+            lastFailureCategory: "storage_error",
+          },
+        });
+      }
       if ((!init || init.method === "GET") && value.startsWith("/api/memory/l0")) {
         return jsonResponse({ data: sampleMessages });
       }
@@ -96,6 +109,11 @@ describe("L0Tab", () => {
       "/api/memory/l0?includeDeleted=deleted",
       expect.objectContaining({ method: "GET" })
     );
+  });
+
+  it("does not render reverse lineage fields outside the canonical L0 contract", async () => {
+    const { container } = await renderL0();
+    expect(container.querySelector("[data-testid='l0-associated-l1-msg-1']")).toBeNull();
   });
 
   it("restores through POST ?op=restore", async () => {
@@ -136,5 +154,26 @@ describe("L0Tab", () => {
     );
     expect(call).toBeTruthy();
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({ mode: "permanent" });
+  });
+
+  it("renders the masked L0 capture status card with aggregate counters", async () => {
+    const { container } = await renderL0();
+    expect(container.querySelector("[data-testid='l0-capture-status']")).toBeTruthy();
+    expect(container.querySelector("[data-testid='l0-capture-success']")?.textContent).toContain(
+      "12"
+    );
+    expect(container.querySelector("[data-testid='l0-capture-failure']")?.textContent).toContain(
+      "2"
+    );
+    expect(
+      container.querySelector("[data-testid='l0-capture-last-success']")?.textContent
+    ).toContain("2026-08-13");
+    expect(
+      container.querySelector("[data-testid='l0-capture-last-failure']")?.textContent
+    ).toContain("storage_error");
+    const statusCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).startsWith("/api/memory/l0/status")
+    );
+    expect(statusCall).toBeTruthy();
   });
 });

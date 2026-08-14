@@ -11,6 +11,7 @@ import {
   putJson,
   useDistillationDlq,
   useDistillationModel,
+  useDistillationUsage,
   useProviderModels,
   type SourceLayer,
 } from "../../hooks/useMemoryLayersApi";
@@ -34,6 +35,7 @@ export default function DistillationSettingsTab({ apiKeyId }: Props) {
   const notify = useNotificationStore();
   const dist = useDistillationModel({ apiKeyId });
   const dlq = useDistillationDlq({ apiKeyId });
+  const usage = useDistillationUsage({ apiKeyId });
   const [provider, setProvider] = useState("");
   const [modelId, setModelId] = useState("");
   const [scope, setScope] = useState<Scope>("self");
@@ -220,6 +222,72 @@ export default function DistillationSettingsTab({ apiKeyId }: Props) {
             {tDist("remove")}
           </AppleButton>
         </div>
+      </AppleCard>
+
+      <AppleCard data-testid="distillation-usage" className="space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <p className="text-xs font-medium text-text-muted">{tDist("usageTitle")}</p>
+          {usage.data ? (
+            <p className="text-[11px] text-text-muted" data-testid="distillation-usage-tasks">
+              {tDist("usageTasks", { count: usage.data.totals.tasks })}
+            </p>
+          ) : null}
+        </div>
+        {usage.isLoading ? (
+          <p className="text-xs text-text-muted" role="status">
+            {tCommon("loading")}
+          </p>
+        ) : usage.error ? (
+          <p className="text-xs text-red-500" role="alert">
+            {tDist("loadUsageFailed")}
+          </p>
+        ) : !usage.data || usage.data.records.length === 0 ? (
+          <p className="text-xs text-text-muted" data-testid="distillation-usage-empty">
+            {tDist("usageEmpty")}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div
+                className="rounded-lg bg-surface/40 px-3 py-2"
+                data-testid="distillation-usage-tokens"
+              >
+                <p className="text-[11px] text-text-muted">{tDist("usageTokens")}</p>
+                <p className="text-base font-medium text-text-main">
+                  {usage.data.totals.tokens.toLocaleString()}
+                </p>
+              </div>
+              <div
+                className="rounded-lg bg-surface/40 px-3 py-2"
+                data-testid="distillation-usage-usd"
+              >
+                <p className="text-[11px] text-text-muted">{tDist("usageUsd")}</p>
+                <p className="text-base font-medium text-text-main">
+                  ${usage.data.totals.usd.toFixed(4)}
+                </p>
+              </div>
+            </div>
+            <ul className="space-y-1.5">
+              {usage.data.records.slice(0, 5).map((row) => (
+                <li
+                  key={`${row.taskId ?? `${row.kind}:${row.recordedAt}`}`}
+                  className="flex items-start justify-between gap-3 rounded-lg bg-surface/30 px-3 py-2"
+                  data-testid={`distillation-usage-row-${row.id}`}
+                >
+                  <div className="min-w-0 space-y-0.5">
+                    <p className="text-xs text-text-main break-words">
+                      {row.provider} / {row.model}
+                    </p>
+                    <p className="text-[11px] text-text-muted">{row.kind}</p>
+                  </div>
+                  <p className="text-[11px] text-text-muted whitespace-nowrap">
+                    {row.tokens.toLocaleString()} tok · ${row.usd.toFixed(4)}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </AppleCard>
 
       <AppleCard data-testid="distillation-dlq" className="space-y-3">

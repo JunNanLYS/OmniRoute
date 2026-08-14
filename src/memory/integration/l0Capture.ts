@@ -9,8 +9,8 @@
  *
  * Hard cutover from the legacy `extractFacts` path:
  *   - FULL text storage (no 64KB cap on input).
- *   - Strip code blocks from assistant text via dynamically imported Tencent
- *     helper OR a local pure fallback (no ai SDK).
+ *   - Preserve user-visible text byte-for-byte in L0. Sanitization belongs to
+ *     downstream distillation inputs, never the raw source layer.
  *   - Pure extraction MUST NOT throw — failures fall back to safe defaults.
  *   - Async write is scheduled via setImmediate; failures are logged + skipped
  *     with NO response impact. No retry.
@@ -114,6 +114,8 @@ export interface L0CaptureGateInput {
   captureEnabled: boolean;
   /** Is the request inside a combo routing tree? */
   isCombo: boolean;
+  /** True only at the top-level, client-visible combo response boundary. */
+  isFinalComboResult?: boolean;
   /** Stable key per combo execution (nullable). */
   comboExecutionKey: string | null;
   /** Stable id per combo step (nullable). */
@@ -128,18 +130,9 @@ export interface L0CaptureGateResult {
 }
 
 /**
- * Hard cutover gate. The combo-final semantics in this implementation are
- * conservative: if `isCombo` is true and we cannot prove this is the final
- * target (no comboExecutionKey/stepId semantics exposed), we skip. Direct
- * requests are always allowed when the other gates pass.
- *
- * The hard cutover rule: combo subrequests (fan-out panels, judges) MUST NOT
- * capture, because their messages are an internal re-routing of an already-
- * captured user prompt. The combo final target is the only one that exposes
- * the user-visible response.
- *
- * Pending: an explicit "final target" flag from the combo layer. Until then,
- * we conservatively skip combo subrequests.
+ * Combo target requests are always rejected by `evaluateL0CaptureGate`. A caller
+ * at the top-level response boundary may override that rejection only by passing
+ * `isFinalComboResult: true` to `shouldCaptureComboResult`.
  */
 export function evaluateL0CaptureGate(input: L0CaptureGateInput): L0CaptureGateResult {
   if (!input.ownerId) {
@@ -152,42 +145,26 @@ export function evaluateL0CaptureGate(input: L0CaptureGateInput): L0CaptureGateR
     return { shouldCapture: false, reason: "capture-disabled" };
   }
   if (input.isCombo) {
-    // Conservative: skip combo subrequests until the combo layer explicitly flags
-    // a final target. `shouldCaptureComboResult` is the documented escape hatch.
     return { shouldCapture: false, reason: "combo-subrequest-skipped" };
   }
   return { shouldCapture: true, reason: null };
 }
 
 /**
- * Explicit helper for combo final-target detection. Returned true means the
- * pipeline can capture even when `isCombo` is true.
- *
- * Composes: caller passes the combo routing metadata. When the combo layer
- * exposes a final-target flag, this helper centralizes the policy. Today the
- * combo layer does not yet expose "final target", so the helper defaults to
- * false (conservative skip).
- *
- * Inputs:
- *   - isCombo: true if this is a combo request (otherwise false).
- *   - comboExecutionKey: when not null, identifies a single combo execution.
- *   - comboStepId: when not null, identifies a single step inside that execution.
- *
- * Returns true ONLY when the combo layer would have set an explicit
- * `comboFinalTarget` flag. Without that flag, we cannot distinguish the
- * combo-final response from a subrequest response, and the safe default is
- * to skip.
+ * Explicit helper for combo final-result detection. Internal target attempts do
+ * not pass the marker and remain rejected; only the top-level response wrapper
+ * can identify a response as the one returned to the client.
  */
 export function shouldCaptureComboResult(input: {
   isCombo: boolean;
   comboExecutionKey: string | null;
   comboStepId: string | null;
+  isFinalComboResult?: boolean;
 }): boolean {
   if (!input.isCombo) return true;
-  // No final-target flag exposed yet by the combo layer. Conservative skip.
   void input.comboExecutionKey;
   void input.comboStepId;
-  return false;
+  return input.isFinalComboResult === true;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -447,6 +424,10 @@ export interface L0CaptureController {
   enqueueL1: L1TaskEnqueuer;
   /** Optional logger for human-readable debugging. */
   log?: { debug?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void } | null;
+  /** Called after the L0 store accepts every record (success telemetry hook). */
+  onSuccess?: () => void;
+  /** Called when the L0 store rejects one or more records (failure telemetry hook). */
+  onFailure?: (category: "storage_error") => void;
 }
 
 /**
@@ -495,21 +476,18 @@ export function buildL0CaptureRecords(input: L0CaptureInputs): L0MessageRecord[]
   }
 
   if (assistantRaw) {
-    // Strip code blocks — pure fallback (sync) here; the async fallback is
-    // applied later by the controller if the Tencent helper is available.
-    const stripped = stripCodeBlocksLocal(assistantRaw);
     records.push({
       id: buildL0MessageId({
         ownerId: input.ownerId,
         sessionId: input.sessionId,
         correlationId: input.correlationId,
         role: "assistant",
-        content: stripped,
+        content: assistantRaw,
       }),
       ownerId: input.ownerId,
       sessionId: input.sessionId,
       role: "assistant",
-      content: stripped,
+      content: assistantRaw,
       metadata: { ...baseMetadata, role: "assistant" },
       createdAt: timestamp,
     });
@@ -522,9 +500,8 @@ export function buildL0CaptureRecords(input: L0CaptureInputs): L0MessageRecord[]
  * Schedule a fire-and-forget L0 write. NEVER throws, NEVER awaits upstream.
  * Uses setImmediate so the write runs after the current tick completes.
  *
- * Includes the async stripCodeBlocks pass so the Tencent helper can apply
- * additional normalization if present. Failure is logged + skipped — no retry,
- * no response impact.
+ * The records are already the canonical raw payload. Sanitization must happen
+ * only in a downstream consumer that works on its own copy.
  */
 export function scheduleL0Capture(
   records: L0MessageRecord[],
@@ -534,46 +511,30 @@ export function scheduleL0Capture(
   setImmediate(() => {
     void (async () => {
       try {
-        // Run the async stripCodeBlocks for the assistant record(s) if the
-        // Tencent helper is available, otherwise keep the local fallback.
-        const finalRecords: L0MessageRecord[] = [];
-        for (const r of records) {
-          if (r.role === "assistant") {
-            const { text } = await stripCodeBlocks(r.content);
-            if (text !== r.content) {
-              finalRecords.push({
-                ...r,
-                content: text,
-                id: buildL0MessageId({
-                  ownerId: r.ownerId,
-                  sessionId: r.sessionId,
-                  correlationId: r.metadata.correlation_id,
-                  role: r.role,
-                  content: text,
-                }),
-              });
-              continue;
-            }
-          }
-          finalRecords.push(r);
-        }
         if (controller.store.insertMany) {
-          await Promise.resolve(controller.store.insertMany(finalRecords));
+          await Promise.resolve(controller.store.insertMany(records));
         } else {
-          for (const r of finalRecords) {
-            await Promise.resolve(controller.store.insert(r));
+          for (const record of records) {
+            await Promise.resolve(controller.store.insert(record));
           }
         }
-        // Enqueue L1 only on successful capture — never on failure.
         try {
-          const first = finalRecords[0];
+          controller.onSuccess?.();
+        } catch (err) {
+          controller.log?.debug?.(
+            "l0.telemetry.successHookFailed",
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+        try {
+          const first = records[0];
           await Promise.resolve(
             controller.enqueueL1.enqueueL1Task({
               ownerId: first.ownerId,
               sessionId: first.sessionId,
               correlationId: first.metadata.correlation_id,
               capturedAt: first.createdAt,
-              records: finalRecords,
+              records,
             })
           );
         } catch (err) {
@@ -590,6 +551,14 @@ export function scheduleL0Capture(
           "l0.capture.failed",
           err instanceof Error ? err.message : String(err)
         );
+        try {
+          controller.onFailure?.("storage_error");
+        } catch (hookErr) {
+          controller.log?.debug?.(
+            "l0.telemetry.failureHookFailed",
+            hookErr instanceof Error ? hookErr.message : String(hookErr)
+          );
+        }
       }
     })();
   });

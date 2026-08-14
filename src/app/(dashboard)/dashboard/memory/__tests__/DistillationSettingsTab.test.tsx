@@ -32,6 +32,32 @@ async function renderDistillation() {
   return { container, root };
 }
 
+const usageResponse = {
+  data: [
+    {
+      id: 1,
+      ownerApiKeyId: "self",
+      kind: "L2_scene",
+      provider: "openai",
+      model: "gpt-4o-mini",
+      tokens: 123,
+      usd: 0.0123,
+      recordedAt: "2026-08-13T00:00:00Z",
+    },
+    {
+      id: 2,
+      ownerApiKeyId: "self",
+      kind: "L3_persona",
+      provider: "openai",
+      model: "gpt-4o-mini",
+      tokens: 77,
+      usd: 0.0077,
+      recordedAt: "2026-08-13T00:01:00Z",
+    },
+  ],
+  totals: { tokens: 200, usd: 0.02, tasks: 2 },
+};
+
 describe("DistillationSettingsTab", () => {
   beforeEach(() => {
     fetchMock.mockReset();
@@ -56,6 +82,9 @@ describe("DistillationSettingsTab", () => {
           ],
           statusCounts: { pending: 1, running: 0, failed: 0, succeeded: 0 },
         });
+      }
+      if (value === "/api/memory/distillation-model/usage" && (!init || init.method === "GET")) {
+        return jsonResponse(usageResponse);
       }
       if (value.startsWith("/api/synced-available-models")) {
         return jsonResponse({ models: [{ id: "gpt-4o-mini", name: "GPT-4o mini" }] });
@@ -117,6 +146,21 @@ describe("DistillationSettingsTab", () => {
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("distillation-dlq"))).toBe(
       false
     );
+  });
+
+  it("renders the distillation usage card with totals and rows", async () => {
+    const { container } = await renderDistillation();
+    expect(container.querySelector("[data-testid='distillation-usage']")).toBeTruthy();
+    expect(
+      container.querySelector("[data-testid='distillation-usage-tokens']")?.textContent
+    ).toContain("200");
+    expect(
+      container.querySelector("[data-testid='distillation-usage-usd']")?.textContent
+    ).toContain("$0.0200");
+    expect(
+      container.querySelector("[data-testid='distillation-usage-tasks']")?.textContent
+    ).toContain("2");
+    expect(container.querySelector("[data-testid='distillation-usage-row-1']")).toBeTruthy();
   });
 
   it("disables global scope when the API says it is unavailable", async () => {

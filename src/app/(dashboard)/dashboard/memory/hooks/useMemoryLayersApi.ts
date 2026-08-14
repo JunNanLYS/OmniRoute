@@ -25,6 +25,17 @@ export interface DistillationDlqEntry {
   lastErrorCode: string | null;
 }
 
+export interface DistillationUsageRecord {
+  id: number;
+  ownerApiKeyId: string;
+  kind: "L0_chunk_embed" | "L1_extract" | "L2_scene" | "L3_persona";
+  provider: string;
+  model: string;
+  tokens: number;
+  usd: number;
+  recordedAt: string;
+}
+
 export interface L0Message {
   id: string;
   ownerApiKeyId: string;
@@ -308,6 +319,74 @@ export function useDistillationDlq(
     (payload: unknown) => envelopeArray<DistillationDlqEntry>(payload),
     []
   );
+  return useLayerQuery(url, options, select);
+}
+
+export interface DistillationUsageResponse {
+  records: Array<{
+    id: number;
+    ownerApiKeyId: string;
+    kind: DistillationUsageRecord["kind"];
+    provider: string;
+    model: string;
+    tokens: number;
+    usd: number;
+    recordedAt: string;
+  }>;
+  totals: { tokens: number; usd: number; tasks: number };
+}
+
+export function useDistillationUsage(
+  options: UseQueryOptions = {}
+): ApiResult<DistillationUsageResponse> {
+  const url = withQuery("/api/memory/distillation-model/usage", {
+    apiKeyId: options.apiKeyId,
+  });
+  const select = useCallback((payload: unknown): DistillationUsageResponse => {
+    const envelope =
+      payload && typeof payload === "object"
+        ? (payload as {
+            data?: DistillationUsageResponse["records"];
+            totals?: DistillationUsageResponse["totals"];
+          })
+        : {};
+    return {
+      records: Array.isArray(envelope.data) ? envelope.data : [],
+      totals: {
+        tokens: Number(envelope.totals?.tokens ?? 0),
+        usd: Number(envelope.totals?.usd ?? 0),
+        tasks: Number(envelope.totals?.tasks ?? 0),
+      },
+    };
+  }, []);
+  return useLayerQuery(url, options, select);
+}
+
+export interface L0CaptureStatus {
+  ownerApiKeyId: string;
+  successCount: number;
+  failureCount: number;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastFailureCategory: string | null;
+}
+
+export function useL0CaptureStatus(options: UseQueryOptions = {}): ApiResult<L0CaptureStatus> {
+  const url = withQuery("/api/memory/l0/status", { apiKeyId: options.apiKeyId });
+  const select = useCallback((payload: unknown): L0CaptureStatus => {
+    const envelope =
+      payload && typeof payload === "object" ? (payload as { data?: L0CaptureStatus }) : {};
+    const data = envelope.data;
+    return {
+      ownerApiKeyId: typeof data?.ownerApiKeyId === "string" ? data.ownerApiKeyId : "",
+      successCount: Number(data?.successCount ?? 0),
+      failureCount: Number(data?.failureCount ?? 0),
+      lastSuccessAt: typeof data?.lastSuccessAt === "string" ? data.lastSuccessAt : null,
+      lastFailureAt: typeof data?.lastFailureAt === "string" ? data.lastFailureAt : null,
+      lastFailureCategory:
+        typeof data?.lastFailureCategory === "string" ? data.lastFailureCategory : null,
+    };
+  }, []);
   return useLayerQuery(url, options, select);
 }
 

@@ -1,4 +1,17 @@
-import type { L0MessageRecord, L0MessageStore } from "./l0Capture.ts";
+import {
+  buildL0CaptureRecords,
+  evaluateL0CaptureGate,
+  scheduleL0Capture,
+  shouldCaptureComboResult,
+  type L0CaptureInputs,
+  type L0MessageRecord,
+  type L0MessageStore,
+} from "./l0Capture.ts";
+import {
+  recordL0CaptureFailure,
+  recordL0CaptureSuccess,
+} from "../db/repositories/l0CaptureTelemetry.ts";
+import { PRODUCTION_L1_TASK_ENQUEUER } from "./distillationQueue.ts";
 import type { RecallProvider } from "../recall/facade.ts";
 import type { Owner } from "../types.ts";
 
@@ -56,6 +69,45 @@ const PRODUCTION_L0_STORE: L0MessageStore = {
 
 export function getProductionL0MessageStore(): L0MessageStore {
   return PRODUCTION_L0_STORE;
+}
+
+export function scheduleProductionL0Capture(
+  input: L0CaptureInputs & {
+    captureEnabled: boolean;
+    isCombo: boolean;
+    isFinalComboResult?: boolean;
+    comboStepId: string | null;
+    log?: { debug?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void } | null;
+  }
+): void {
+  const gateInput = {
+    ownerId: input.ownerId,
+    isInternal: false,
+    captureEnabled: input.captureEnabled,
+    isCombo: input.isCombo,
+    isFinalComboResult: input.isFinalComboResult,
+    comboExecutionKey: input.comboExecutionKey,
+    comboStepId: input.comboStepId,
+  };
+  const gate = evaluateL0CaptureGate(gateInput);
+  const captureAllowed =
+    gate.shouldCapture ||
+    (gate.reason === "combo-subrequest-skipped" && shouldCaptureComboResult(gateInput));
+  if (!captureAllowed) return;
+
+  const records = buildL0CaptureRecords(input);
+  if (records.length === 0) return;
+
+  // Telemetry only records the captured attempt; the gate does NOT mark a
+  // failure because "gate rejected" is a known intentional outcome.
+  const ownerApiKeyId = input.ownerId;
+  scheduleL0Capture(records, {
+    store: PRODUCTION_L0_STORE,
+    enqueueL1: PRODUCTION_L1_TASK_ENQUEUER,
+    log: input.log,
+    onSuccess: () => recordL0CaptureSuccess(ownerApiKeyId),
+    onFailure: (category) => recordL0CaptureFailure(ownerApiKeyId, category),
+  });
 }
 
 function readTags(metadata: Record<string, unknown>): string[] {

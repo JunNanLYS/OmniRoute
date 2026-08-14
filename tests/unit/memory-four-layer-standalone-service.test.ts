@@ -319,3 +319,66 @@ test("DLQ list/retry remains scoped to the caller owner", async () => {
   });
   assert.deepEqual(retry, { retried: 1, skipped: 0 });
 });
+
+test("distillation usage listing remains scoped to the caller owner", async () => {
+  const store = distillation.createDistillationStore();
+  await store.recordUsage({
+    taskId: "usage-owner-a-1",
+    scope: "owner-a",
+    kind: "L2_scene",
+    provider: "openai",
+    model: "gpt-4o-mini",
+    tokens: 50,
+    usd: 0.005,
+    recordedAt: 100,
+  });
+  await store.recordUsage({
+    taskId: "usage-owner-a-2",
+    scope: "owner-a",
+    kind: "L3_persona",
+    provider: "openai",
+    model: "gpt-4o-mini",
+    tokens: 25,
+    usd: 0.0025,
+    recordedAt: 200,
+  });
+  await store.recordUsage({
+    taskId: "usage-owner-b-1",
+    scope: "owner-b",
+    kind: "L2_scene",
+    provider: "anthropic",
+    model: "claude",
+    tokens: 10,
+    usd: 0.001,
+    recordedAt: 300,
+  });
+
+  const ownerA = await service.listDistillationUsage(scope("owner-a"), { limit: 10 });
+  assert.equal(ownerA.records.length, 2);
+  assert.equal(ownerA.totals.tokens, 75);
+  assert.equal(ownerA.totals.tasks, 2);
+
+  const ownerB = await service.listDistillationUsage(scope("owner-b"), { limit: 10 });
+  assert.equal(ownerB.records.length, 1);
+  assert.equal(ownerB.totals.tokens, 10);
+  assert.equal(ownerB.records[0]!.ownerApiKeyId, "owner-b");
+});
+
+test("getL0CaptureStatus returns the masked counters for the caller owner only", async () => {
+  const telemetry = await import("../../src/memory/db/repositories/l0CaptureTelemetry.ts");
+  telemetry.recordL0CaptureSuccess("owner-a");
+  telemetry.recordL0CaptureFailure("owner-a", "storage_error");
+  telemetry.recordL0CaptureSuccess("owner-b");
+
+  const ownerA = await service.getL0CaptureStatus(scope("owner-a"));
+  assert.equal(ownerA.ownerApiKeyId, "owner-a");
+  assert.equal(ownerA.successCount, 1);
+  assert.equal(ownerA.failureCount, 1);
+  assert.equal(ownerA.lastFailureCategory, "storage_error");
+
+  const ownerB = await service.getL0CaptureStatus(scope("owner-b"));
+  assert.equal(ownerB.ownerApiKeyId, "owner-b");
+  assert.equal(ownerB.successCount, 1);
+  assert.equal(ownerB.failureCount, 0);
+  assert.equal(ownerB.lastFailureCategory, null);
+});

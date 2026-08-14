@@ -4229,7 +4229,13 @@
       "dlqRetry": "Retry",
       "dlqEmpty": "No failed jobs",
       "loadDlqFailed": "Failed to load dead-letter queue",
-      "globalUnavailable": "Global scope is only available when running in management context"
+      "globalUnavailable": "Global scope is only available when running in management context",
+      "usageTitle": "Distillation usage",
+      "usageEmpty": "No distillation usage recorded yet",
+      "usageTasks": "{count, plural, one {# task} other {# tasks}}",
+      "usageTokens": "Total tokens",
+      "usageUsd": "Total cost (USD)",
+      "loadUsageFailed": "Could not load distillation usage"
     },
     "l0": {
       "title": "L0 — Raw messages",
@@ -4266,7 +4272,13 @@
       "loadFailed": "Could not load messages",
       "deleted": "Deleted {when}",
       "restoreFailed": "Could not restore",
-      "permanentDeleteFailed": "Could not permanently delete"
+      "permanentDeleteFailed": "Could not permanently delete",
+      "captureStatusTitle": "L0 capture status",
+      "captureSuccess": "Captured",
+      "captureFailure": "Failed",
+      "captureLastSuccess": "Last success: {when}",
+      "captureLastFailure": "Last failure: {when} ({category})",
+      "loadStatusFailed": "Could not load L0 capture status"
     },
     "l1": {
       "title": "L1 — Memory entries",

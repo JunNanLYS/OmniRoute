@@ -258,6 +258,8 @@ function isSchemaAlreadyApplied(
       );
     case "distillation_usage_idempotency":
       return hasIndex(db, "idx_distillation_usage_task");
+    case "l0_capture_telemetry":
+      return hasTable(db, "l0_capture_telemetry");
     default:
       return false;
   }

@@ -95,6 +95,76 @@ test("owner scope rejects self overrides and honors management overrides", async
   assert.equal(allowed.status, 200);
 });
 
+test("collection routes pass only layer-supported filters to storage", async () => {
+  const captured: Record<string, Record<string, unknown>> = {};
+  const emptyResult = { data: [], total: 0, page: 1, limit: 20 };
+  dependencies.setFourLayerServiceForTesting({
+    ...createFourLayerService(),
+    listL0: async (_scope, query) => {
+      captured.l0 = query;
+      return emptyResult;
+    },
+    listL1: async (_scope, query) => {
+      captured.l1 = query;
+      return emptyResult;
+    },
+    searchL1: async (_scope, query) => {
+      captured.l1 = query;
+      return emptyResult;
+    },
+    listL2: async (_scope, query) => {
+      captured.l2 = query;
+      return emptyResult;
+    },
+    listL3: async (_scope, query) => {
+      captured.l3 = query;
+      return emptyResult;
+    },
+  });
+
+  const routes = {
+    l0: await import("../../src/app/api/memory/l0/route.ts"),
+    l1: await import("../../src/app/api/memory/l1/route.ts"),
+    l2: await import("../../src/app/api/memory/l2/route.ts"),
+    l3: await import("../../src/app/api/memory/l3/route.ts"),
+  };
+  const query = new URLSearchParams({
+    page: "1",
+    limit: "20",
+    offset: "0",
+    sessionId: "session-a",
+    sceneName: "scene-a",
+    sourceId: "source-a",
+    type: "work_fact",
+    q: "needle",
+    includeDeleted: "any",
+  });
+
+  for (const [layer, route] of Object.entries(routes)) {
+    const response = await route.GET(
+      new Request(`http://localhost/api/memory/${layer}?${query}`, { headers: selfHeaders() })
+    );
+    assert.equal(response.status, 200);
+  }
+
+  assert.deepEqual(
+    Object.keys(captured.l0).sort(),
+    ["apiKeyId", "includeDeleted", "limit", "offset", "page", "q", "sessionId"].sort()
+  );
+  assert.deepEqual(
+    Object.keys(captured.l1).sort(),
+    ["apiKeyId", "includeDeleted", "limit", "offset", "page", "q", "sceneName", "type"].sort()
+  );
+  assert.deepEqual(
+    Object.keys(captured.l2).sort(),
+    ["apiKeyId", "includeDeleted", "limit", "offset", "page", "q", "sceneName"].sort()
+  );
+  assert.deepEqual(
+    Object.keys(captured.l3).sort(),
+    ["apiKeyId", "includeDeleted", "limit", "offset", "page"].sort()
+  );
+});
+
 test("L0 canonical import is idempotent and supports session recycle", async () => {
   const collection = await import("../../src/app/api/memory/l0/route.ts");
   const detail = await import("../../src/app/api/memory/l0/[id]/route.ts");
@@ -293,6 +363,44 @@ test("L2 canonical scenes support optimistic conflict and regeneration enqueue",
   assert.equal((await distillation.createDistillationStore().getQueueStats()).queued, 1);
 });
 
+test("bodyless L2 and L3 regeneration use the empty default body", async () => {
+  const l2Collection = await import("../../src/app/api/memory/l2/route.ts");
+  const l2Regenerate = await import("../../src/app/api/memory/l2/[id]/regenerate/route.ts");
+  const l3Collection = await import("../../src/app/api/memory/l3/route.ts");
+  const sceneResponse = await l2Collection.POST(
+    new Request("http://localhost/api/memory/l2", {
+      method: "POST",
+      headers: selfHeaders(),
+      body: JSON.stringify({
+        sceneName: "bodyless",
+        summary: "Bodyless regeneration",
+        heat: 0.5,
+        content: "Scene source",
+      }),
+    })
+  );
+  const scene = (await sceneResponse.json()).data;
+
+  const l2Response = await l2Regenerate.POST(
+    new Request(`http://localhost/api/memory/l2/${scene.id}/regenerate`, {
+      method: "POST",
+      headers: selfHeaders(),
+    }),
+    { params: Promise.resolve({ id: scene.id as string }) }
+  );
+  assert.equal(l2Response.status, 200);
+  assert.equal((await l2Response.json()).enqueued, 1);
+
+  const l3Response = await l3Collection.POST(
+    new Request("http://localhost/api/memory/l3", {
+      method: "POST",
+      headers: selfHeaders(),
+    })
+  );
+  assert.equal(l3Response.status, 200);
+  assert.equal((await l3Response.json()).enqueued, 1);
+});
+
 test("L3 singleton persona returns 409 for stale expectedVersion and restores", async () => {
   const collection = await import("../../src/app/api/memory/l3/route.ts");
   const detail = await import("../../src/app/api/memory/l3/[id]/route.ts");
@@ -482,6 +590,123 @@ test("DLQ listing and retry are owner-scoped", async () => {
   assert.equal(retriedBody.retried, 1);
   assert.equal(distillation.getDistillationTask(ownTask.id)?.status, "queued");
   assert.equal(distillation.getDistillationTask(otherTask.id)?.status, "failed_dlq");
+});
+
+test("distillation usage listing is owner-scoped and returns aggregate totals", async () => {
+  const db = await import("../../src/memory/db/core.ts");
+  const dbInstance = db.getMemoryDbInstance();
+  const insert = dbInstance.prepare(
+    `INSERT INTO distillation_usage (
+      task_id, scope, kind, provider, model, tokens, usd, recorded_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  const now = Date.now();
+  insert.run(
+    "own-task-1",
+    selfRecord.id,
+    "L2_scene",
+    "openai",
+    "gpt-4o-mini",
+    100,
+    0.01,
+    now - 1000
+  );
+  insert.run(
+    "own-task-2",
+    selfRecord.id,
+    "L3_persona",
+    "openai",
+    "gpt-4o-mini",
+    200,
+    0.02,
+    now - 500
+  );
+  insert.run(
+    "other-task-1",
+    "other-owner",
+    "L2_scene",
+    "anthropic",
+    "claude",
+    50,
+    0.005,
+    now - 200
+  );
+
+  const route = await import("../../src/app/api/memory/distillation-model/usage/route.ts");
+  const listed = await route.GET(
+    new Request("http://localhost/api/memory/distillation-model/usage", {
+      headers: selfHeaders(),
+    })
+  );
+  assert.equal(listed.status, 200);
+  const body = await listed.json();
+  assert.equal(body.data.length, 2);
+  assert.equal(body.totals.tokens, 300);
+  assert.equal(body.totals.usd, 0.03);
+  assert.equal(body.totals.tasks, 2);
+  for (const row of body.data) {
+    assert.equal(row.ownerApiKeyId, selfRecord.id);
+    assert.ok(["L2_scene", "L3_persona"].includes(row.kind));
+    assert.ok(row.provider === "openai" || row.provider === "anthropic");
+  }
+
+  // Cross-owner leakage: management caller targeting other-owner returns 0
+  const crossOwner = await route.GET(
+    new Request(`http://localhost/api/memory/distillation-model/usage?apiKeyId=other-owner`, {
+      headers: managementHeaders(),
+    })
+  );
+  assert.equal(crossOwner.status, 200);
+  const crossBody = await crossOwner.json();
+  assert.equal(crossBody.data.length, 1);
+  assert.equal(crossBody.data[0].ownerApiKeyId, "other-owner");
+  assert.equal(crossBody.totals.tokens, 50);
+
+  // 401 on missing bearer
+  const denied = await route.GET(
+    new Request("http://localhost/api/memory/distillation-model/usage", {
+      headers: { authorization: "Bearer not-a-real-key" },
+    })
+  );
+  assert.equal(denied.status, 401);
+});
+
+test("L0 capture status is owner-scoped and exposes masked aggregate counters only", async () => {
+  const telemetry = await import("../../src/memory/db/repositories/l0CaptureTelemetry.ts");
+  telemetry.recordL0CaptureSuccess(selfRecord.id);
+  telemetry.recordL0CaptureSuccess(selfRecord.id);
+  // unknown category must be sanitized away, not persisted verbatim
+  telemetry.recordL0CaptureFailure(selfRecord.id, "should-not-leak");
+  telemetry.recordL0CaptureFailure(selfRecord.id, "storage_error");
+  telemetry.recordL0CaptureSuccess("other-owner");
+
+  const route = await import("../../src/app/api/memory/l0/status/route.ts");
+  const response = await route.GET(
+    new Request("http://localhost/api/memory/l0/status", { headers: selfHeaders() })
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.data.ownerApiKeyId, selfRecord.id);
+  assert.equal(body.data.successCount, 2);
+  assert.equal(body.data.failureCount, 2);
+  assert.equal(body.data.lastFailureCategory, "storage_error");
+  assert.ok(typeof body.data.lastSuccessAt === "string");
+  assert.ok(typeof body.data.lastFailureAt === "string");
+
+  // 401 on missing bearer
+  const denied = await route.GET(
+    new Request("http://localhost/api/memory/l0/status", {
+      headers: { authorization: "Bearer not-a-real-key" },
+    })
+  );
+  assert.equal(denied.status, 401);
+
+  // response body MUST NOT contain content/tokens/secret-like fields
+  const text = JSON.stringify(body);
+  assert.equal(text.includes("content"), false);
+  assert.equal(text.includes("token"), false);
+  assert.equal(text.includes("secret"), false);
+  assert.equal(text.includes("should-not-leak"), false);
 });
 
 test("storage errors are sanitized and do not expose absolute paths", async () => {

@@ -272,120 +272,667 @@ paths:
         "404":
           description: Preset not found
   # --- Four-Layer Memory (v4.0) ---
-  # All routes use ManagementSessionAuth. Per-API-key `memory.inject` scope is honored
-  # on /api/memory/l0 reads. No Redis, no Qdrant, no external vector store. Capture and
-  # injection are off by default and scoped per API key. See docs/frameworks/MEMORY.md.
+  # Owner identity is derived from the authenticated dashboard session or API key.
+  # Self callers cannot cross owners; management callers may select apiKeyId.
 
   /api/memory/l0:
     get:
-      tags:
-        - Memory
-      summary: Read raw L0 turns
-      description: |
-        Reads the verbatim transcript window from L0 (raw session storage).
-        Bounded by `?limit=` (default 100, max 1000). All error responses are
-        routed through `sanitizeErrorMessage()` — no raw `err.stack` / `err.message`
-        in the body.
+      tags: [Memory]
+      summary: List raw L0 messages
+      description: Lists immutable raw messages with pagination, session, text, and recycle filters.
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
       parameters:
         - name: apiKeyId
           in: query
-          required: true
-          schema:
-            type: string
-        - name: conversationId
+          schema: { type: string }
+        - name: page
           in: query
-          required: true
-          schema:
-            type: string
-        - name: from
-          in: query
-          schema:
-            type: integer
-            description: Lower bound turn id (inclusive)
-        - name: to
-          in: query
-          schema:
-            type: integer
-            description: Upper bound turn id (inclusive)
+          schema: { type: integer, minimum: 1, default: 1 }
         - name: limit
           in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 1000
-            default: 100
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0 }
+        - name: sessionId
+          in: query
+          schema: { type: string }
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: includeDeleted
+          in: query
+          schema: { type: string, enum: [active, deleted, any], default: active }
       responses:
         "200":
-          description: Raw L0 turns
+          description: Paginated L0 messages
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/L0Turn" }
+                  pagination: { $ref: "#/components/schemas/MemoryPagination" }
+        "400": { description: Invalid query parameters }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Memory]
+      summary: Import L0 messages or delete an L0 session
+      description: |
+        Without `sessionId`, imports 1–500 messages and returns 201. With
+        `?sessionId=...`, the body must carry the same session id and the route
+        soft- or permanently deletes that session, returning 200.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: sessionId
+          in: query
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [sessionId, items]
+                  properties:
+                    sessionId: { type: string, minLength: 1 }
+                    items:
+                      type: array
+                      minItems: 1
+                      maxItems: 500
+                      items:
+                        type: object
+                        required: [idempotencyKey, role, content]
+                        properties:
+                          idempotencyKey: { type: string, minLength: 1, maxLength: 256 }
+                          role: { type: string, enum: [user, assistant] }
+                          content: { type: string, minLength: 1 }
+                          timestamp: { type: string, format: date-time }
+                          correlationId: { type: string }
+                          provider: { type: string }
+                          model: { type: string }
+                - type: object
+                  required: [sessionId]
+                  properties:
+                    sessionId: { type: string, minLength: 1 }
+                    mode: { type: string, enum: [soft, permanent], default: soft }
+      responses:
+        "200": { description: L0 session deleted }
+        "201": { description: L0 messages imported }
+        "400": { description: Validation or storage error }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/memory/l0/status:
+    get:
+      tags: [Memory]
+      summary: Read owner-scoped L0 capture telemetry
+      description: >-
+        Masked aggregate counters for L0 capture attempts. Never returns message
+        content, tokens, secrets, or correlation payloads.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      responses:
+        "200":
+          description: L0 capture status for the resolved owner
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  turns:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/L0Turn"
-                  total:
-                    type: integer
-                  truncated:
-                    type: boolean
-        "400":
-          description: Validation error
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+                  data: { $ref: "#/components/schemas/L0CaptureStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { description: Storage error }
+
+  /api/memory/l0/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Memory]
+      summary: Read one L0 message
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      responses:
+        "200":
+          description: L0 message
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/L0Turn" }
+        "404": { description: L0 message not found }
+    delete:
+      tags: [Memory]
+      summary: Soft-delete or permanently delete one L0 message
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MemoryDeleteBody" }
+      responses:
+        "200": { description: L0 message deleted }
+        "404": { description: L0 message not found }
+    post:
+      tags: [Memory]
+      summary: Restore one soft-deleted L0 message
+      description: Only `op=restore` is supported; omitted `op` defaults to restore.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: op
+          in: query
+          schema: { type: string, enum: [restore], default: restore }
+      responses:
+        "200": { description: L0 message restored }
+        "400": { description: Unsupported operation }
+        "404": { description: L0 message not found in recycle }
 
   /api/memory/l1:
     get:
-      tags:
-        - Memory
-      summary: List L1 typed facts
-      description: |
-        Lists L1 facts (preference, fact, decision, pattern, profile, context,
-        correction). FTS5 by default; sqlite-vec hybrid RRF (k=60) when an
-        embedding source is configured and `MEMORY_ENABLE_VECTOR=true`.
+      tags: [Memory]
+      summary: List or search L1 curated memories
+      description: A non-empty `q` selects FTS5 search; otherwise this returns a listing.
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
       parameters:
         - name: apiKeyId
           in: query
-          required: true
-          schema:
-            type: string
-        - name: type
+          schema: { type: string }
+        - name: page
           in: query
-          schema:
-            type: string
-            enum:
-              - preference
-              - fact
-              - decision
-              - pattern
-              - profile
-              - context
-              - correction
-        - name: key
-          in: query
-          schema:
-            type: string
+          schema: { type: integer, minimum: 1, default: 1 }
         - name: limit
           in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 500
-            default: 100
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
         - name: offset
           in: query
-          schema:
-            type: integer
-            minimum: 0
-            default: 0
+          schema: { type: integer, minimum: 0 }
+        - name: sceneName
+          in: query
+          schema: { type: string }
+        - name: type
+          in: query
+          schema: { $ref: "#/components/schemas/L1Type" }
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: includeDeleted
+          in: query
+          schema: { type: string, enum: [active, deleted, any], default: active }
       responses:
         "200":
-          description: List of L1 facts
+          description: Paginated L1 memories
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/L1Fact" }
+                  pagination: { $ref: "#/components/schemas/MemoryPagination" }
+        "400": { description: Invalid query parameters }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [Memory]
+      summary: Create an L1 curated memory
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, content, sceneName]
+              properties:
+                type: { $ref: "#/components/schemas/L1Type" }
+                priority: { type: integer, minimum: 0, maximum: 100, default: 50 }
+                content: { type: string, minLength: 1 }
+                sceneName: { type: string, minLength: 1 }
+                metadata: { type: object, additionalProperties: true, default: {} }
+                sourceMessageIds:
+                  type: array
+                  maxItems: 500
+                  items: { type: string }
+                  default: []
+      responses:
+        "201": { description: L1 memory created }
+        "400": { description: Validation or storage error }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/memory/l1/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Memory]
+      summary: Read one L1 memory
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      responses:
+        "200": { description: L1 memory }
+        "404": { description: L1 memory not found }
+    put:
+      tags: [Memory]
+      summary: Update one L1 memory with optimistic concurrency
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedVersion]
+              properties:
+                priority: { type: integer, minimum: 0, maximum: 100 }
+                content: { type: string, minLength: 1 }
+                sceneName: { type: string, minLength: 1 }
+                metadata: { type: object, additionalProperties: true }
+                sourceMessageIds:
+                  type: array
+                  maxItems: 500
+                  items: { type: string }
+                expectedVersion: { type: integer, minimum: 1 }
+      responses:
+        "200": { description: L1 memory updated }
+        "400": { description: Validation or storage error }
+        "409": { description: Optimistic version conflict }
+    delete:
+      tags: [Memory]
+      summary: Soft-delete or permanently delete one L1 memory
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MemoryDeleteBody" }
+      responses:
+        "200": { description: L1 memory deleted }
+        "404": { description: L1 memory not found }
+    post:
+      tags: [Memory]
+      summary: Restore one soft-deleted L1 memory
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: op
+          in: query
+          schema: { type: string, enum: [restore], default: restore }
+      responses:
+        "200": { description: L1 memory restored }
+        "400": { description: Unsupported operation }
+        "404": { description: L1 memory not found in recycle }
+
+  /api/memory/l2:
+    get:
+      tags: [Memory]
+      summary: List L2 derived scenes
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: apiKeyId
+          in: query
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0 }
+        - name: sceneName
+          in: query
+          schema: { type: string }
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: includeDeleted
+          in: query
+          schema: { type: string, enum: [active, deleted, any], default: active }
+      responses:
+        "200":
+          description: Paginated L2 scenes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/L2Entry" }
+                  pagination: { $ref: "#/components/schemas/MemoryPagination" }
+        "400": { description: Invalid query parameters }
+    post:
+      tags: [Memory]
+      summary: Create an L2 scene
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sceneName, summary, heat, content]
+              properties:
+                sceneName: { type: string, minLength: 1 }
+                groupKey: { type: [string, "null"] }
+                summary: { type: string }
+                heat: { type: number, minimum: 0, maximum: 1 }
+                content: { type: string, minLength: 1 }
+      responses:
+        "201": { description: L2 scene created }
+        "400": { description: Validation or storage error }
+
+  /api/memory/l2/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Memory]
+      summary: Read one L2 scene
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      responses:
+        "200": { description: L2 scene }
+        "404": { description: L2 scene not found }
+    put:
+      tags: [Memory]
+      summary: Update one L2 scene with optimistic concurrency
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedVersion]
+              properties:
+                sceneName: { type: string, minLength: 1 }
+                groupKey: { type: [string, "null"] }
+                summary: { type: string }
+                heat: { type: number, minimum: 0, maximum: 1 }
+                content: { type: string, minLength: 1 }
+                expectedVersion: { type: integer, minimum: 1 }
+      responses:
+        "200": { description: L2 scene updated }
+        "400": { description: Validation or storage error }
+        "409": { description: Optimistic version conflict }
+    delete:
+      tags: [Memory]
+      summary: Soft-delete or permanently delete one L2 scene
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MemoryDeleteBody" }
+      responses:
+        "200": { description: L2 scene deleted }
+        "404": { description: L2 scene not found }
+    post:
+      tags: [Memory]
+      summary: Restore one soft-deleted L2 scene
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: op
+          in: query
+          schema: { type: string, enum: [restore], default: restore }
+      responses:
+        "200": { description: L2 scene restored }
+        "400": { description: Unsupported operation }
+        "404": { description: L2 scene not found in recycle }
+
+  /api/memory/l2/{id}/regenerate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [Memory]
+      summary: Enqueue regeneration for one L2 scene
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MemoryRegenerateBody" }
+      responses:
+        "200": { description: Regeneration task enqueued }
+        "400": { description: Validation or storage error }
+        "409": { description: Rolling-window error cap reached }
+
+  /api/memory/l3:
+    get:
+      tags: [Memory]
+      summary: List L3 distilled personas
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: apiKeyId
+          in: query
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0 }
+        - name: includeDeleted
+          in: query
+          schema: { type: string, enum: [active, deleted, any], default: active }
+      responses:
+        "200":
+          description: Paginated L3 personas
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/L3Working" }
+                  pagination: { $ref: "#/components/schemas/MemoryPagination" }
+        "400": { description: Invalid query parameters }
+    post:
+      tags: [Memory]
+      summary: Enqueue global L3 regeneration
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MemoryRegenerateBody" }
+      responses:
+        "200": { description: Regeneration task enqueued }
+        "400": { description: Validation or storage error }
+        "409": { description: Rolling-window error cap reached }
+
+  /api/memory/l3/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Memory]
+      summary: Read one L3 persona
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      responses:
+        "200": { description: L3 persona }
+        "404": { description: L3 persona not found }
+    put:
+      tags: [Memory]
+      summary: Upsert an L3 persona
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content, promptMode]
+              properties:
+                content: { type: string, minLength: 1 }
+                promptMode: { type: string, enum: [chat, code] }
+                expectedVersion: { type: integer, minimum: 1 }
+      responses:
+        "200": { description: L3 persona upserted }
+        "400": { description: Validation or storage error }
+        "409": { description: Optimistic version conflict }
+    delete:
+      tags: [Memory]
+      summary: Soft-delete, restore, or permanently delete one L3 persona
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode: { type: string, enum: [soft, restore, permanent], default: soft }
+      responses:
+        "200": { description: L3 persona mutated }
+        "404": { description: L3 persona not found }
+
+  /api/memory/distillation-model:
+    get:
+      tags: [Memory]
+      summary: Read the effective distillation selector
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: apiKeyId
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Effective selector
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/DistillationSelector" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Cross-owner selector access denied }
+    put:
+      tags: [Memory]
+      summary: Set a per-key or global distillation selector
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, modelId, scope]
+              properties:
+                provider: { type: string, minLength: 1 }
+                modelId: { type: string, minLength: 1 }
+                scope: { type: string, enum: [self, global] }
+                apiKeyId: { type: string, minLength: 1 }
+      responses:
+        "200": { description: Selector stored }
+        "400": { description: Invalid or unavailable provider/model }
+        "403": { description: Scope or owner access denied }
+    delete:
+      tags: [Memory]
+      summary: Delete a per-key or global distillation selector
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: scope
+          in: query
+          schema: { type: string, enum: [self, global], default: global }
+        - name: apiKeyId
+          in: query
+          schema: { type: string }
+      responses:
+        "200": { description: Selector deleted }
+        "400": { description: Invalid scope }
+        "403": { description: Scope or owner access denied }
+        "404": { description: Selector not found }
+
+  /api/memory/distillation-model/dlq:
+    get:
+      tags: [Memory]
+      summary: List distillation DLQ entries
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: statuses
+          in: query
+          description: Comma-separated pending, running, failed, or succeeded statuses.
+          schema: { type: string }
+      responses:
+        "200":
+          description: DLQ entries and status counts
           content:
             application/json:
               schema:
@@ -393,465 +940,76 @@ paths:
                 properties:
                   data:
                     type: array
-                    items:
-                      $ref: "#/components/schemas/L1Fact"
-                  total:
-                    type: integer
-        "400":
-          description: Validation error
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-    post:
-      tags:
-        - Memory
-      summary: Upsert an L1 fact
-      description: |
-        Upserts an L1 fact. Dedups on `(apiKeyId, type, key)`. All error responses
-        are sanitized via `sanitizeErrorMessage()`.
-      security:
-        - ManagementSessionAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - apiKeyId
-                - type
-                - key
-                - content
-              properties:
-                apiKeyId:
-                  type: string
-                type:
-                  type: string
-                  enum:
-                    - preference
-                    - fact
-                    - decision
-                    - pattern
-                    - profile
-                    - context
-                    - correction
-                key:
-                  type: string
-                  minLength: 1
-                content:
-                  type: string
-                  minLength: 1
-                metadata:
-                  type: object
-                  additionalProperties: true
-      responses:
-        "200":
-          description: Upserted L1 fact
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/L1Fact"
-        "400":
-          description: Validation error
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/memory/l1/{id}:
-    parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
-        description: L1 fact UUID
-    delete:
-      tags:
-        - Memory
-      summary: Delete an L1 fact
-      description: |
-        Deletes one L1 row. Does not affect L0, L2, or L3. All error responses
-        are sanitized.
-      security:
-        - ManagementSessionAuth: []
-      responses:
-        "200":
-          description: Deleted
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          description: L1 fact not found
-
-  /api/memory/l2:
-    get:
-      tags:
-        - Memory
-      summary: List L2 navigation entries
-      description: |
-        Lists L2 navigation entries for a conversation. Capped at 15 entries per
-        conversation server-side; older entries are pruned at the next
-        distillation pass.
-      security:
-        - ManagementSessionAuth: []
-      parameters:
-        - name: apiKeyId
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: conversationId
-          in: query
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: L2 navigation set
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  entries:
-                    type: array
-                    maxItems: 15
-                    items:
-                      $ref: "#/components/schemas/L2Entry"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-    put:
-      tags:
-        - Memory
-      summary: Replace L2 navigation set
-      description: |
-        Replaces the L2 navigation set for a conversation. The server enforces
-        the ≤15-entry cap (extras are dropped with a warning header). All error
-        responses are sanitized.
-      security:
-        - ManagementSessionAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - apiKeyId
-                - conversationId
-                - entries
-              properties:
-                apiKeyId:
-                  type: string
-                conversationId:
-                  type: string
-                entries:
-                  type: array
-                  items:
+                    items: { $ref: "#/components/schemas/DistillationDlqEntry" }
+                  statusCounts:
                     type: object
-                    required:
-                      - pointer
-                      - activation
+                    additionalProperties: { type: integer }
+                  pagination:
+                    type: object
                     properties:
-                      pointer:
-                        type: string
-                      activation:
-                        type: number
-                        minimum: 0
-                        maximum: 1
-                      label:
-                        type: string
-      responses:
-        "200":
-          description: Updated L2 set
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  entries:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/L2Entry"
-        "400":
-          description: Validation error
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/memory/l3:
-    get:
-      tags:
-        - Memory
-      summary: Read L3 singleton
-      description: |
-        Reads the L3 working memory singleton for a conversation: branch
-        (`chat` or `code`), optional `guideId`, and the scratchpad. All error
-        responses are sanitized.
-      security:
-        - ManagementSessionAuth: []
-      parameters:
-        - name: apiKeyId
-          in: query
-          required: true
-          schema:
-            type: string
-        - name: conversationId
-          in: query
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: L3 singleton
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/L3Working"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-    put:
-      tags:
-        - Memory
-      summary: Replace L3 singleton
-      description: |
-        Replaces the L3 singleton. `branch` must be `chat` or `code`. All error
-        responses are sanitized.
-      security:
-        - ManagementSessionAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - apiKeyId
-                - conversationId
-                - branch
-              properties:
-                apiKeyId:
-                  type: string
-                conversationId:
-                  type: string
-                branch:
-                  type: string
-                  enum:
-                    - chat
-                    - code
-                guideId:
-                  type: string
-                scratchpad:
-                  type: string
-      responses:
-        "200":
-          description: Updated L3 singleton
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/L3Working"
-        "400":
-          description: Validation error
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/memory/regenerate:
+                      limit: { type: integer }
     post:
-      tags:
-        - Memory
-      summary: Force re-distillation of one L0 batch
-      description: |
-        Forces a re-distillation of one L0 batch: clears the matching L1/L2
-        contributions for that batch and re-runs distillation against the
-        current selector chain. Returns the new L1/L2 snapshot. All error
-        responses are sanitized.
+      tags: [Memory]
+      summary: Retry selected or all distillation DLQ entries
       security:
-        - ManagementSessionAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - apiKeyId
-                - conversationId
-                - batchId
-              properties:
-                apiKeyId:
-                  type: string
-                conversationId:
-                  type: string
-                batchId:
-                  type: string
-      responses:
-        "200":
-          description: New L1/L2 snapshot
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  l1:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/L1Fact"
-                  l2:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/L2Entry"
-        "400":
-          description: Validation error
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/memory/distillation-model:
-    get:
-      tags:
-        - Memory
-      summary: Inspect distillation selector chain
-      description: |
-        Returns the current distillation selector chain state: enabled flag,
-        resolved model, source, and the candidate list (in selector order).
-      security:
-        - ManagementSessionAuth: []
-      responses:
-        "200":
-          description: Distillation model info
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  enabled:
-                    type: boolean
-                  model:
-                    type: string
-                    nullable: true
-                  source:
-                    type: string
-                    enum:
-                      - env
-                      - selector
-                      - default
-                      - disabled
-                  candidates:
-                    type: array
-                    items:
-                      type: string
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-    put:
-      tags:
-        - Memory
-      summary: Override distillation model
-      description: |
-        Overrides the distillation model. Pass `null` to fall back to the
-        selector chain. Validates against `listEmbeddingProviders()` and the
-        chat provider registry.
-      security:
-        - ManagementSessionAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - model
-              properties:
-                model:
-                  type: string
-                  nullable: true
-                  description: "`provider/model` or null to fall back to the selector chain"
-      responses:
-        "200":
-          description: Updated distillation model info
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  enabled:
-                    type: boolean
-                  model:
-                    type: string
-                    nullable: true
-                  source:
-                    type: string
-        "400":
-          description: Validation error (model not configured / not chat-capable)
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/memory/distillation/dlq:
-    get:
-      tags:
-        - Memory
-      summary: List failed distillation batches
-      description: |
-        Lists failed distillation batches from the DLQ. Each entry contains the
-        raw model output, last error (sanitized), the model id, and timestamp.
-      security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
       parameters:
-        - name: apiKeyId
+        - name: op
           in: query
-          schema:
-            type: string
-        - name: conversationId
-          in: query
-          schema:
-            type: string
-        - name: since
-          in: query
-          schema:
-            type: string
-            format: date-time
+          required: true
+          schema: { type: string, enum: [retry] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [ids]
+                  properties:
+                    ids:
+                      type: array
+                      minItems: 1
+                      maxItems: 500
+                      items: { type: string }
+                - type: object
+                  required: [all]
+                  properties:
+                    all: { type: boolean, const: true }
+      responses:
+        "200": { description: DLQ retry result }
+        "400": { description: Missing op=retry, invalid body, or storage error }
+
+  /api/memory/distillation-model/usage:
+    get:
+      tags: [Memory]
+      summary: List distillation usage (token + USD accounting)
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
         - name: limit
           in: query
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 500
-            default: 50
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
       responses:
         "200":
-          description: DLQ entries
+          description: Owner-scoped usage records and totals
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  batches:
+                  data:
                     type: array
-                    items:
-                      type: object
-                      properties:
-                        batchId:
-                          type: string
-                        apiKeyId:
-                          type: string
-                        conversationId:
-                          type: string
-                        model:
-                          type: string
-                        rawOutput:
-                          type: string
-                        error:
-                          type: string
-                        createdAt:
-                          type: string
-                          format: date-time
-                  total:
-                    type: integer
-        "400":
-          description: Validation error
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+                    items: { $ref: "#/components/schemas/DistillationUsageRecord" }
+                  totals: { $ref: "#/components/schemas/DistillationUsageSummary" }
+                  pagination:
+                    type: object
+                    properties:
+                      limit: { type: integer }
+        "401": { description: Authentication required }
+        "500": { description: Storage error }
 
   # ─── Proxy Endpoints ──────────────────────────────────────────
 
@@ -6291,125 +6449,209 @@ components:
           type: object
           additionalProperties: true
           default: {}
+    MemoryPagination:
+      type: object
+      required: [page, limit, total, totalPages]
+      properties:
+        page: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        total: { type: integer, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+    MemoryDeleteBody:
+      type: object
+      properties:
+        mode: { type: string, enum: [soft, permanent], default: soft }
+    MemoryRegenerateBody:
+      type: object
+      properties:
+        reason: { type: string, maxLength: 200 }
+    L1Type:
+      type: string
+      enum: [persona, episodic, instruction, work_fact, work_task, work_method, work_artifact]
     L0Turn:
       type: object
-      description: A single raw turn in L0 (verbatim transcript storage)
+      description: One immutable raw message in L0
+      required:
+        [
+          id,
+          ownerApiKeyId,
+          sessionKey,
+          role,
+          content,
+          timestamp,
+          recordedAt,
+          source,
+          isInternal,
+          truncated,
+          idempotencyKey,
+        ]
       properties:
-        turnId:
-          type: integer
-          description: Monotonic turn id within the conversation
-        apiKeyId:
-          type: string
-        conversationId:
-          type: string
-        role:
-          type: string
-          enum:
-            - user
-            - assistant
-            - system
-            - tool
-        text:
-          type: string
-          description: Verbatim visible text. Sanitized through PII pass when `PII_REDACTION_ENABLED=true`.
-        createdAt:
-          type: string
-          format: date-time
-        distilledAt:
-          type: string
-          format: date-time
-          nullable: true
-          description: Set when distillation consumed this turn
-        batchId:
-          type: string
-          nullable: true
-          description: Distillation batch id (used by `POST /api/memory/regenerate`)
+        id: { type: string }
+        ownerApiKeyId: { type: string }
+        sessionKey: { type: string }
+        sessionId: { type: [string, "null"] }
+        role: { type: string, enum: [user, assistant] }
+        content: { type: string }
+        timestamp: { type: string, format: date-time }
+        recordedAt: { type: string, format: date-time }
+        source: { type: string, enum: [user, assistant, imported] }
+        correlationId: { type: [string, "null"] }
+        comboExecutionKey: { type: [string, "null"] }
+        isInternal: { type: boolean }
+        provider: { type: [string, "null"] }
+        model: { type: [string, "null"] }
+        truncated: { type: boolean }
+        idempotencyKey: { type: string }
+        deletedAt: { type: [string, "null"], format: date-time }
     L1Fact:
       type: object
-      description: An L1 typed fact (one of 7 types)
-      required: [id, apiKeyId, type, key, content]
+      description: One owner-curated L1 memory
+      required:
+        [
+          id,
+          ownerApiKeyId,
+          type,
+          priority,
+          content,
+          sceneName,
+          metadata,
+          sourceMessageIds,
+          version,
+          createdAt,
+          updatedAt,
+          lastModifiedBy,
+          editedByUser,
+        ]
       properties:
-        id:
-          type: string
-          description: UUID
-        apiKeyId:
-          type: string
-        type:
-          type: string
-          enum:
-            - preference
-            - fact
-            - decision
-            - pattern
-            - profile
-            - context
-            - correction
-        key:
-          type: string
-          description: Stable upsert key per (apiKeyId, type)
-        content:
-          type: string
-        metadata:
-          type: object
-          additionalProperties: true
-        cacheSafe:
-          type: boolean
-          description: Whether the fact is cache-safe to inject into the user cache-safe path
-        accessCount:
-          type: integer
-        lastAccessedAt:
-          type: string
-          format: date-time
-          nullable: true
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
+        id: { type: string }
+        ownerApiKeyId: { type: string }
+        type: { $ref: "#/components/schemas/L1Type" }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+        content: { type: string }
+        sceneName: { type: string }
+        metadata: { type: object, additionalProperties: true }
+        sourceMessageIds:
+          type: array
+          items: { type: string }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lastModifiedBy: { type: string, enum: [user, pipeline] }
+        editedByUser: { type: boolean }
+        deletedAt: { type: [string, "null"], format: date-time }
     L2Entry:
       type: object
-      description: An L2 navigation pointer (≤15 per conversation)
-      required: [pointer, activation]
+      description: One derived L2 scene
+      required:
+        [
+          id,
+          ownerApiKeyId,
+          sceneName,
+          summary,
+          heat,
+          content,
+          version,
+          createdAt,
+          updatedAt,
+          lastModifiedBy,
+          editedByUser,
+        ]
       properties:
-        pointer:
-          type: string
-          description: Opaque pointer (e.g. an L1 key, a guideId, or a topic slug)
-        activation:
-          type: number
-          minimum: 0
-          maximum: 1
-          description: Recency × activation score
-        label:
-          type: string
-        createdAt:
-          type: string
-          format: date-time
+        id: { type: string }
+        ownerApiKeyId: { type: string }
+        sceneName: { type: string }
+        groupKey: { type: [string, "null"] }
+        summary: { type: string }
+        heat: { type: number, minimum: 0, maximum: 1 }
+        content: { type: string }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lastModifiedBy: { type: string, enum: [user, pipeline] }
+        editedByUser: { type: boolean }
+        deletedAt: { type: [string, "null"], format: date-time }
     L3Working:
       type: object
-      description: L3 working memory singleton for a conversation
-      required: [apiKeyId, conversationId, branch, updatedAt]
+      description: The owner-visible distilled L3 persona
+      required:
+        [
+          id,
+          ownerApiKeyId,
+          content,
+          promptMode,
+          version,
+          createdAt,
+          updatedAt,
+          lastModifiedBy,
+          editedByUser,
+        ]
       properties:
-        apiKeyId:
-          type: string
-        conversationId:
-          type: string
-        branch:
-          type: string
-          enum:
-            - chat
-            - code
-          description: Mutually exclusive working branch
-        guideId:
-          type: string
-          nullable: true
-          description: Pointer into the L1 guide system
-        scratchpad:
-          type: string
-          description: Free-form scratchpad text (bounded)
-        updatedAt:
-          type: string
-          format: date-time
+        id: { type: string }
+        ownerApiKeyId: { type: string }
+        content: { type: string }
+        promptMode: { type: string, enum: [chat, code] }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lastModifiedBy: { type: string, enum: [user, pipeline] }
+        editedByUser: { type: boolean }
+        deletedAt: { type: [string, "null"], format: date-time }
+    DistillationSelector:
+      type: object
+      required: [provider, modelId, sourceLayer]
+      properties:
+        provider: { type: string }
+        modelId: { type: string }
+        sourceLayer: { type: string, enum: [per-key, global, env, auto] }
+        apiKeyId: { type: [string, "null"] }
+        scope: { type: [string, "null"], enum: [self, global, null] }
+    DistillationDlqEntry:
+      type: object
+      required: [id, ownerApiKeyId, sourceLayer, errorMessage, errorAt, retryCount, status]
+      properties:
+        id: { type: string }
+        ownerApiKeyId: { type: string }
+        sourceLayer: { type: string, enum: [l0, l1, l2] }
+        sourceId: { type: [string, "null"] }
+        errorMessage: { type: string }
+        errorAt: { type: string, format: date-time }
+        retryCount: { type: integer, minimum: 0 }
+        status: { type: string, enum: [pending, running, failed, succeeded] }
+        lastErrorCode: { type: [string, "null"] }
+    DistillationUsageRecord:
+      type: object
+      required: [id, ownerApiKeyId, kind, provider, model, tokens, usd, recordedAt]
+      properties:
+        id: { type: integer }
+        ownerApiKeyId: { type: string }
+        kind: { type: string, enum: [L0_chunk_embed, L1_extract, L2_scene, L3_persona] }
+        provider: { type: string }
+        model: { type: string }
+        tokens: { type: integer, minimum: 0 }
+        usd: { type: number, minimum: 0 }
+        recordedAt: { type: string, format: date-time }
+    DistillationUsageSummary:
+      type: object
+      required: [tokens, usd, tasks]
+      properties:
+        tokens: { type: integer, minimum: 0 }
+        usd: { type: number, minimum: 0 }
+        tasks: { type: integer, minimum: 0 }
+    L0CaptureStatus:
+      type: object
+      description: >-
+        Owner-scoped, masked aggregate counters for L0 capture attempts.
+        Never includes message content, prompt tokens, secrets, or correlation payloads.
+      required: [ownerApiKeyId, successCount, failureCount]
+      properties:
+        ownerApiKeyId: { type: string }
+        successCount: { type: integer, minimum: 0 }
+        failureCount: { type: integer, minimum: 0 }
+        lastSuccessAt: { type: [string, "null"], format: date-time }
+        lastFailureAt: { type: [string, "null"], format: date-time }
+        lastFailureCategory:
+          type: [string, "null"]
+          enum: [null, storage_error, invalid_owner, gate_rejected, telemetry_unavailable]
     AgentSkill:
       type: object
       description: >-

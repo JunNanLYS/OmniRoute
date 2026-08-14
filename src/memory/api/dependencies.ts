@@ -18,6 +18,10 @@ import { createFourLayerService } from "../db/service.ts";
 import type { Owner } from "../types.ts";
 
 import type {
+  L0ListingQuery,
+  L1ListingQuery,
+  L2ListingQuery,
+  L3ListingQuery,
   L0Import,
   L0DeleteBody,
   L0DeleteAll,
@@ -135,6 +139,28 @@ export interface DistillationDlqEntry {
   lastErrorCode: string | null;
 }
 
+export interface DistillationUsageRecord {
+  id: number;
+  ownerApiKeyId: string;
+  kind: "L0_chunk_embed" | "L1_extract" | "L2_scene" | "L3_persona";
+  provider: string;
+  model: string;
+  tokens: number;
+  usd: number;
+  recordedAt: string;
+}
+
+export interface DistillationUsageSummary {
+  tokens: number;
+  usd: number;
+  tasks: number;
+}
+
+export interface ListDistillationUsageResult {
+  records: DistillationUsageRecord[];
+  totals: DistillationUsageSummary;
+}
+
 export interface ListResult<T> {
   data: T[];
   total: number;
@@ -142,18 +168,13 @@ export interface ListResult<T> {
   limit: number;
 }
 
-export interface L1ListingQuery {
+export type MemoryListingQuery = {
   page?: number;
   limit?: number;
   offset?: number;
   apiKeyId?: string;
-  sessionId?: string;
-  sceneName?: string;
-  sourceId?: string;
-  type?: string;
-  q?: string;
   includeDeleted?: "active" | "deleted" | "any";
-}
+};
 
 export class MemoryOptimisticConflictError extends Error {
   constructor(message = "Memory optimistic version conflict") {
@@ -178,7 +199,7 @@ export interface RegenerateEnqueueResult {
 export interface MemoryFourLayerService {
   // L0
   importL0(scope: MemoryRequestScope, data: L0Import): Promise<{ importedIds: string[] }>;
-  listL0(scope: MemoryRequestScope, query: L1ListingQuery): Promise<ListResult<MemoryL0>>;
+  listL0(scope: MemoryRequestScope, query: L0ListingQuery): Promise<ListResult<MemoryL0>>;
   getL0(scope: MemoryRequestScope, id: string): Promise<MemoryL0 | null>;
   deleteL0(scope: MemoryRequestScope, id: string, mode: L0DeleteBody["mode"]): Promise<boolean>;
   deleteL0Session(
@@ -203,7 +224,7 @@ export interface MemoryFourLayerService {
 
   // L2
   createL2(scope: MemoryRequestScope, data: L2Create): Promise<MemoryL2>;
-  listL2(scope: MemoryRequestScope, query: L1ListingQuery): Promise<ListResult<MemoryL2>>;
+  listL2(scope: MemoryRequestScope, query: L2ListingQuery): Promise<ListResult<MemoryL2>>;
   getL2(scope: MemoryRequestScope, id: string): Promise<MemoryL2 | null>;
   updateL2(
     scope: MemoryRequestScope,
@@ -219,7 +240,7 @@ export interface MemoryFourLayerService {
   ): Promise<RegenerateEnqueueResult>;
 
   // L3
-  listL3(scope: MemoryRequestScope, query: L1ListingQuery): Promise<ListResult<MemoryL3>>;
+  listL3(scope: MemoryRequestScope, query: L3ListingQuery): Promise<ListResult<MemoryL3>>;
   getL3(scope: MemoryRequestScope, id: string): Promise<MemoryL3 | null>;
   upsertL3(scope: MemoryRequestScope, data: L3Upsert): Promise<MemoryL3>;
   deleteL3(scope: MemoryRequestScope, id: string, mode: L3DeleteBody["mode"]): Promise<boolean>;
@@ -250,6 +271,22 @@ export interface MemoryFourLayerService {
     scope: MemoryRequestScope,
     data: DistillationDlqRetry
   ): Promise<{ retried: number; skipped: number }>;
+
+  // Distillation usage (token + USD accounting)
+  listDistillationUsage(
+    scope: MemoryRequestScope,
+    options: { limit: number }
+  ): Promise<ListDistillationUsageResult>;
+
+  // L0 capture telemetry — owner-scoped, masked aggregate counters.
+  getL0CaptureStatus(scope: MemoryRequestScope): Promise<{
+    ownerApiKeyId: string;
+    successCount: number;
+    failureCount: number;
+    lastSuccessAt: string | null;
+    lastFailureAt: string | null;
+    lastFailureCategory: string | null;
+  }>;
 }
 
 // ────────────────────────────── Auth subject ──────────────────────────────
@@ -397,6 +434,19 @@ class NotImplementedService implements MemoryFourLayerService {
     return this.fail();
   }
   retryDistillationDlq(): Promise<{ retried: number; skipped: number }> {
+    return this.fail();
+  }
+  listDistillationUsage(): Promise<ListDistillationUsageResult> {
+    return this.fail();
+  }
+  getL0CaptureStatus(): Promise<{
+    ownerApiKeyId: string;
+    successCount: number;
+    failureCount: number;
+    lastSuccessAt: string | null;
+    lastFailureAt: string | null;
+    lastFailureCategory: string | null;
+  }> {
     return this.fail();
   }
 }

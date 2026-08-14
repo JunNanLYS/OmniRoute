@@ -1,8 +1,11 @@
 import type {
   DistillationDlqEntry,
   DistillationSelector,
-  L1ListingQuery,
+  DistillationUsageRecord,
+  DistillationUsageSummary,
+  ListDistillationUsageResult,
   ListResult,
+  MemoryListingQuery,
   MemoryFourLayerService,
   MemoryL0,
   MemoryL1,
@@ -56,10 +59,12 @@ import {
   getDistillationDlqStatusCounts,
   getDistillationTask,
   listDistillationDlqEntries,
+  listDistillationUsageRecords,
   retryDistillationDlqEntries,
   type PersistentDistillationDlqEntry,
 } from "./repositories/distillation.ts";
 import { getSetting, softDeleteSetting, upsertSetting } from "../operations.ts";
+import { readL0CaptureTelemetry } from "./repositories/l0CaptureTelemetry.ts";
 import type { L0Message, L1Memory, L2Scene, L3Persona } from "../types.ts";
 import type {
   DistillationDlqRetry,
@@ -92,20 +97,20 @@ function assertScope(scope: MemoryRequestScope): void {
   }
 }
 
-function includeDeleted(query: L1ListingQuery): boolean {
+function includeDeleted(query: MemoryListingQuery): boolean {
   return query.includeDeleted === "deleted" || query.includeDeleted === "any";
 }
 
 function filterRecycle<T extends { deletedAt: string | null }>(
   rows: readonly T[],
-  query: L1ListingQuery
+  query: MemoryListingQuery
 ): T[] {
   if (query.includeDeleted === "deleted") return rows.filter((row) => row.deletedAt !== null);
   if (query.includeDeleted === "any") return [...rows];
   return rows.filter((row) => row.deletedAt === null);
 }
 
-function paginate<T>(rows: readonly T[], query: L1ListingQuery): ListResult<T> {
+function paginate<T>(rows: readonly T[], query: MemoryListingQuery): ListResult<T> {
   const limit = Math.min(100, Math.max(1, Math.floor(query.limit ?? 20)));
   const offset = Math.max(
     0,
@@ -745,6 +750,41 @@ export function createFourLayerService(): MemoryFourLayerService {
       const denied = requested.length - scopedIds.length;
       const result = retryDistillationDlqEntries(scopedIds, scope.ownerApiKeyId);
       return { retried: result.retried, skipped: result.skipped + denied };
+    },
+
+    async listDistillationUsage(
+      scope: MemoryRequestScope,
+      options: { limit: number }
+    ): Promise<ListDistillationUsageResult> {
+      assertScope(scope);
+      const records = listDistillationUsageRecords({
+        scope: scope.ownerApiKeyId,
+        limit: options.limit,
+      });
+      const mapped: DistillationUsageRecord[] = records.map((row, index) => ({
+        id: index + 1,
+        ownerApiKeyId: row.scope,
+        kind: row.kind,
+        provider: row.provider,
+        model: row.model,
+        tokens: row.tokens,
+        usd: row.usd,
+        recordedAt: new Date(row.recordedAt).toISOString(),
+      }));
+      const totals: DistillationUsageSummary = mapped.reduce(
+        (acc, row) => ({
+          tokens: acc.tokens + row.tokens,
+          usd: acc.usd + row.usd,
+          tasks: acc.tasks + 1,
+        }),
+        { tokens: 0, usd: 0, tasks: 0 }
+      );
+      return { records: mapped, totals };
+    },
+
+    async getL0CaptureStatus(scope: MemoryRequestScope) {
+      assertScope(scope);
+      return readL0CaptureTelemetry(scope.ownerApiKeyId);
     },
   };
 }

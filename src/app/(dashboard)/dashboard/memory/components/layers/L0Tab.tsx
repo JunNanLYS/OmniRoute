@@ -5,8 +5,7 @@
  *
  * Surfaces only public metadata: session id, timestamp, role, provider, model.
  * Internal markers like is_internal / combo_execution_key are deliberately
- * hidden. Each row links to its associated L1 memories for cross-layer
- * navigation. Soft-deleted messages appear in the recycle bin section, where
+ * hidden. Soft-deleted messages appear in the recycle bin section, where
  * restore / permanent-delete flows are double-confirmed.
  */
 
@@ -19,6 +18,7 @@ import {
   deleteJson,
   postJson,
   truncId,
+  useL0CaptureStatus,
   useL0Messages,
   useL0RecycleBin,
   type L0Message,
@@ -67,6 +67,7 @@ export default function L0Tab({ initialSessionId, apiKeyId }: Props) {
 
   const messages = useL0Messages(filter, { apiKeyId });
   const recycleBin = useL0RecycleBin({ apiKeyId });
+  const captureStatus = useL0CaptureStatus({ apiKeyId });
 
   // Sync the URL-derived initial session id into the filter only when the
   // prop itself changes (render-time adjustment, not setState-in-effect).
@@ -185,6 +186,47 @@ export default function L0Tab({ initialSessionId, apiKeyId }: Props) {
         </div>
       </AppleSurface>
 
+      <AppleCard data-testid="l0-capture-status" className="space-y-3">
+        <p className="text-xs font-medium text-text-muted">{t("l0.captureStatusTitle")}</p>
+        {captureStatus.isLoading ? (
+          <p className="text-xs text-text-muted" role="status">
+            {tCommon("loading")}
+          </p>
+        ) : captureStatus.error || !captureStatus.data ? (
+          <p className="text-xs text-red-500" role="alert">
+            {t("l0.loadStatusFailed")}
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="rounded-lg bg-surface/40 px-3 py-2" data-testid="l0-capture-success">
+              <p className="text-[11px] text-text-muted">{t("l0.captureSuccess")}</p>
+              <p className="text-base font-medium text-text-main">
+                {captureStatus.data.successCount.toLocaleString()}
+              </p>
+            </div>
+            <div className="rounded-lg bg-surface/40 px-3 py-2" data-testid="l0-capture-failure">
+              <p className="text-[11px] text-text-muted">{t("l0.captureFailure")}</p>
+              <p className="text-base font-medium text-text-main">
+                {captureStatus.data.failureCount.toLocaleString()}
+              </p>
+            </div>
+            <div className="sm:col-span-2 text-[11px] text-text-muted space-y-0.5">
+              <p data-testid="l0-capture-last-success">
+                {t("l0.captureLastSuccess", {
+                  when: captureStatus.data.lastSuccessAt ?? "—",
+                })}
+              </p>
+              <p data-testid="l0-capture-last-failure">
+                {t("l0.captureLastFailure", {
+                  when: captureStatus.data.lastFailureAt ?? "—",
+                  category: captureStatus.data.lastFailureCategory ?? "—",
+                })}
+              </p>
+            </div>
+          </div>
+        )}
+      </AppleCard>
+
       {/* Messages list */}
       <AppleCard className="space-y-3" data-testid="l0-messages">
         {messages.isLoading ? (
@@ -240,15 +282,6 @@ export default function L0Tab({ initialSessionId, apiKeyId }: Props) {
                         >
                           {m.content}
                         </pre>
-                      )}
-                      {m.associatedL1Ids && m.associatedL1Ids.length > 0 && (
-                        <a
-                          className="text-[11px] text-primary hover:underline"
-                          href={`?tab=l1&lineage=${encodeURIComponent(m.associatedL1Ids.join(","))}`}
-                          data-testid={`l0-associated-l1-${m.id}`}
-                        >
-                          {t("l0.associatedL1")} ({m.associatedL1Ids.length})
-                        </a>
                       )}
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
