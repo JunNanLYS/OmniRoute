@@ -734,3 +734,49 @@ test("storage errors are sanitized and do not expose absolute paths", async () =
   assert.equal(body.includes("/secret/path/file.ts"), false);
   assert.equal(/\sat\s+\//.test(body), false);
 });
+
+test("pipeline settings can be enabled per API key and reset to fallback", async () => {
+  const route = await import("../../src/app/api/memory/pipeline-settings/route.ts");
+
+  const initial = await route.GET(
+    new Request("http://localhost/api/memory/pipeline-settings", { headers: selfHeaders() })
+  );
+  assert.equal(initial.status, 200);
+  const initialData = (await initial.json()).data as Record<string, unknown>;
+  assert.equal(initialData.captureEnabled, false);
+  assert.equal(initialData.injectionEnabled, false);
+  assert.equal(initialData.sourceLayer, "default");
+
+  const saved = await route.PUT(
+    new Request("http://localhost/api/memory/pipeline-settings", {
+      method: "PUT",
+      headers: selfHeaders(),
+      body: JSON.stringify({ captureEnabled: true, injectionEnabled: true }),
+    })
+  );
+  assert.equal(saved.status, 200);
+  const savedData = (await saved.json()).data as Record<string, unknown>;
+  assert.equal(savedData.captureEnabled, true);
+  assert.equal(savedData.injectionEnabled, true);
+  assert.equal(savedData.sourceLayer, "per-key");
+  assert.equal(savedData.apiKeyId, selfRecord.id);
+
+  const persisted = await route.GET(
+    new Request("http://localhost/api/memory/pipeline-settings", { headers: selfHeaders() })
+  );
+  const persistedData = (await persisted.json()).data as Record<string, unknown>;
+  assert.equal(persistedData.captureEnabled, true);
+  assert.equal(persistedData.injectionEnabled, true);
+
+  const reset = await route.DELETE(
+    new Request("http://localhost/api/memory/pipeline-settings", {
+      method: "DELETE",
+      headers: selfHeaders(),
+    })
+  );
+  assert.equal(reset.status, 200);
+  const resetData = (await reset.json()).data as Record<string, unknown>;
+  assert.equal(resetData.captureEnabled, false);
+  assert.equal(resetData.injectionEnabled, false);
+  assert.equal(resetData.sourceLayer, "default");
+});

@@ -50,7 +50,13 @@ export async function GET(request: Request) {
 
   try {
     const service = getService();
-    const result = await service.listL3(owner, parsed.data);
+    const result = await service.listL3(owner, {
+      page: parsed.data.page,
+      limit: parsed.data.limit,
+      offset: parsed.data.offset,
+      apiKeyId: parsed.data.apiKeyId,
+      includeDeleted: parsed.data.includeDeleted,
+    });
     return NextResponse.json({
       data: result.data,
       pagination: buildPagination({
@@ -71,7 +77,7 @@ export async function POST(request: Request) {
   const owner = await resolveOwner(request);
   if ("errorResponse" in owner) return owner.errorResponse;
 
-  const body = await validatedJsonBody(request, L3RegenerateSchema);
+  const body = await validatedJsonBody(request, L3RegenerateSchema, { allowEmpty: true });
   if (!body.success) return body.response;
 
   try {

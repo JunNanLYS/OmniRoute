@@ -152,3 +152,9 @@ export {
   type StopOptions,
   type WorkerRuntimeOptions,
 } from "./worker.ts";
+export {
+  getDistillationWorkerStatus,
+  reconcileDistillationWorker,
+  type DistillationWorkerStatus,
+  type RuntimeWorkerConfig,
+} from "./runtimeController.ts";

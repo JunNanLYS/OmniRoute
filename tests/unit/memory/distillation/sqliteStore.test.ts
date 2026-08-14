@@ -11,6 +11,7 @@ process.env["DISABLE_SQLITE_AUTO_BACKUP"] = "true";
 const core = await import("../../../../src/memory/db/core.ts");
 const storeModule = await import("../../../../src/memory/distillation/store.ts");
 const repository = await import("../../../../src/memory/db/repositories/distillation.ts");
+const { withOwnerLock } = await import("../../../../src/memory/distillation/lock.ts");
 
 function wipeDb(): void {
   core.resetMemoryDbInstance();
@@ -688,4 +689,47 @@ test("scope locks are mutually exclusive across store instances", async () => {
   await first.releaseLock("api-key-1", "worker-a");
   const acquired = await second.acquireLock("api-key-1", "worker-b", 60_000);
   assert.equal(acquired?.ownerId, "worker-b");
+});
+
+test("expired SQLite lock can be taken by another owner", async () => {
+  wipeDb();
+  const first = repository.createDistillationStore();
+  const second = repository.createDistillationStore();
+
+  const held = await first.acquireLock("api-key-expired", "worker-a", 1);
+  assert.ok(held);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const recovered = await second.acquireLock("api-key-expired", "worker-b", 60_000);
+  assert.equal(recovered?.ownerId, "worker-b");
+});
+
+test("releaseLock only deletes the row owned by the caller", async () => {
+  wipeDb();
+  const first = repository.createDistillationStore();
+  const second = repository.createDistillationStore();
+
+  const held = await first.acquireLock("api-key-guarded", "worker-a", 60_000);
+  assert.ok(held);
+  await second.releaseLock("api-key-guarded", "worker-b");
+
+  const denied = await second.acquireLock("api-key-guarded", "worker-b", 60_000);
+  assert.equal(denied, null);
+
+  const renewed = await first.acquireLock("api-key-guarded", "worker-a", 90_000);
+  assert.equal(renewed?.ownerId, "worker-a");
+});
+
+test("withOwnerLock reports failure once another owner holds the SQLite lock", async () => {
+  wipeDb();
+  const holder = repository.createDistillationStore();
+  const challenger = repository.createDistillationStore();
+
+  const held = await holder.acquireLock("api-key-contended", "worker-a", 60_000);
+  assert.ok(held);
+  const handle = await withOwnerLock(challenger, "api-key-contended", "worker-b");
+  assert.equal(handle, null);
+
+  const stillHeld = await holder.acquireLock("api-key-contended", "worker-a", 90_000);
+  assert.equal(stillHeld?.ownerId, "worker-a");
 });

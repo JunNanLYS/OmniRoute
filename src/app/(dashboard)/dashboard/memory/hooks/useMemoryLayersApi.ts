@@ -4,6 +4,31 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export type SourceLayer = "per-key" | "global" | "env" | "auto";
 
+export interface MemoryPipelineSettingsConfig {
+  captureEnabled: boolean;
+  injectionEnabled: boolean;
+  l3CharBudget: number;
+  l2CharBudget: number;
+  l1CharBudget: number;
+  totalCharBudget: number;
+  recallTimeoutMs: number;
+  sourceLayer: "per-key" | "env" | "default";
+  apiKeyId: string | null;
+}
+
+export interface DistillationWorkerConfig {
+  enabled: boolean;
+  intervalSeconds: number;
+  concurrency: number;
+  sourceLayer: "stored" | "env" | "default";
+  runtime: {
+    state: "stopped" | "starting" | "running" | "stopping";
+    activeTasks: number;
+    configuredIntervalSeconds: number | null;
+    configuredConcurrency: number | null;
+  };
+}
+
 export interface DistillationModelConfig {
   provider: string;
   modelId: string;
@@ -284,6 +309,69 @@ export function useL3Prompts(options: UseQueryOptions = {}): ApiResult<L3Prompt[
   const url = withQuery("/api/memory/l3", { apiKeyId: options.apiKeyId });
   const select = useCallback((payload: unknown) => envelopeArray<L3Prompt>(payload), []);
   return useLayerQuery(url, options, select);
+}
+
+export function useMemoryPipelineSettings(
+  options: UseQueryOptions = {}
+): ApiResult<MemoryPipelineSettingsConfig> {
+  const url = withQuery("/api/memory/pipeline-settings", { apiKeyId: options.apiKeyId });
+  const select = useCallback((payload: unknown): MemoryPipelineSettingsConfig => {
+    const envelope =
+      payload && typeof payload === "object"
+        ? (payload as ApiEnvelope<MemoryPipelineSettingsConfig>)
+        : {};
+    const data = envelope.data;
+    return {
+      captureEnabled: data?.captureEnabled === true,
+      injectionEnabled: data?.injectionEnabled === true,
+      l3CharBudget: Number(data?.l3CharBudget ?? 600),
+      l2CharBudget: Number(data?.l2CharBudget ?? 600),
+      l1CharBudget: Number(data?.l1CharBudget ?? 600),
+      totalCharBudget: Number(data?.totalCharBudget ?? 8000),
+      recallTimeoutMs: Number(data?.recallTimeoutMs ?? 5000),
+      sourceLayer:
+        data?.sourceLayer === "per-key" || data?.sourceLayer === "env"
+          ? data.sourceLayer
+          : "default",
+      apiKeyId: typeof data?.apiKeyId === "string" ? data.apiKeyId : null,
+    };
+  }, []);
+  return useLayerQuery(url, options, select);
+}
+
+export function useDistillationWorker(): ApiResult<DistillationWorkerConfig> {
+  const url = "/api/memory/distillation-worker";
+  const select = useCallback((payload: unknown): DistillationWorkerConfig => {
+    const envelope =
+      payload && typeof payload === "object"
+        ? (payload as ApiEnvelope<DistillationWorkerConfig>)
+        : {};
+    const data = envelope.data;
+    const runtime = data?.runtime;
+    return {
+      enabled: data?.enabled === true,
+      intervalSeconds: Number(data?.intervalSeconds ?? 60),
+      concurrency: Number(data?.concurrency ?? 3),
+      sourceLayer:
+        data?.sourceLayer === "stored" || data?.sourceLayer === "env"
+          ? data.sourceLayer
+          : "default",
+      runtime: {
+        state: runtime?.state ?? "stopped",
+        activeTasks: Number(runtime?.activeTasks ?? 0),
+        configuredIntervalSeconds:
+          runtime?.configuredIntervalSeconds === null ||
+          runtime?.configuredIntervalSeconds === undefined
+            ? null
+            : Number(runtime.configuredIntervalSeconds),
+        configuredConcurrency:
+          runtime?.configuredConcurrency === null || runtime?.configuredConcurrency === undefined
+            ? null
+            : Number(runtime.configuredConcurrency),
+      },
+    };
+  }, []);
+  return useLayerQuery(url, { skip: false }, select);
 }
 
 export function useDistillationModel(

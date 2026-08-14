@@ -62,7 +62,15 @@ export async function GET(request: Request) {
 
   try {
     const service = getService();
-    const result = await service.listL0(owner, parsed.data);
+    const result = await service.listL0(owner, {
+      page: parsed.data.page,
+      limit: parsed.data.limit,
+      offset: parsed.data.offset,
+      apiKeyId: parsed.data.apiKeyId,
+      sessionId: parsed.data.sessionId,
+      q: parsed.data.q,
+      includeDeleted: parsed.data.includeDeleted,
+    });
     return NextResponse.json({
       data: result.data,
       pagination: buildPagination({

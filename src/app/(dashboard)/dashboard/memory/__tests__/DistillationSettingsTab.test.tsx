@@ -20,14 +20,14 @@ const selectorResponse = {
   canSetGlobal: true,
 };
 
-async function renderDistillation() {
+async function renderDistillation(apiKeyId?: string) {
   const { default: DistillationSettingsTab } =
     await import("../components/layers/DistillationSettingsTab");
   const container = document.createElement("div");
   document.body.appendChild(container);
   cleanupCallbacks.push(() => container.remove());
   const root = createRoot(container);
-  await act(async () => root.render(<DistillationSettingsTab />));
+  await act(async () => root.render(<DistillationSettingsTab apiKeyId={apiKeyId} />));
   await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
   return { container, root };
 }
@@ -67,6 +67,27 @@ describe("DistillationSettingsTab", () => {
     ).IS_REACT_ACT_ENVIRONMENT = true;
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const value = String(url);
+      if (value.startsWith("/api/memory/pipeline-settings") && (!init || init.method === "GET")) {
+        return jsonResponse({
+          data: { captureEnabled: false, injectionEnabled: true, sourceLayer: "per-key" },
+        });
+      }
+      if (value === "/api/memory/distillation-worker" && (!init || init.method === "GET")) {
+        return jsonResponse({
+          data: {
+            enabled: true,
+            intervalSeconds: 120,
+            concurrency: 2,
+            sourceLayer: "stored",
+            runtime: {
+              state: "running",
+              activeTasks: 1,
+              configuredIntervalSeconds: 120,
+              configuredConcurrency: 2,
+            },
+          },
+        });
+      }
       if (value === "/api/memory/distillation-model" && (!init || init.method === "GET")) {
         return jsonResponse(selectorResponse);
       }
@@ -182,5 +203,70 @@ describe("DistillationSettingsTab", () => {
       (node) => node.getAttribute("aria-disabled") === "true"
     );
     expect(option).toBeTruthy();
+  });
+
+  it("saves owner-scoped capture and injection settings", async () => {
+    const { container } = await renderDistillation("owner-1");
+    const capture = container.querySelector(
+      "[data-testid='memory-capture-toggle'] [role='switch']"
+    ) as HTMLButtonElement;
+    await act(async () => capture.click());
+    await act(async () => {
+      (
+        container.querySelector("[data-testid='memory-pipeline-save']") as HTMLButtonElement
+      ).click();
+    });
+
+    const call = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        String(url) === "/api/memory/pipeline-settings?apiKeyId=owner-1" && init?.method === "PUT"
+    );
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+      captureEnabled: true,
+      injectionEnabled: true,
+    });
+  });
+  it("renders process-global distillation worker controls and saves them", async () => {
+    const { container } = await renderDistillation("owner-1");
+
+    expect(container.querySelector("[data-testid='distillation-worker-settings']")).toBeTruthy();
+    expect(container.querySelector("[data-testid='distillation-worker-source']")?.textContent).toBe(
+      "Saved global settings"
+    );
+    expect(container.querySelector("[data-testid='distillation-worker-interval']")).toHaveValue(
+      "120"
+    );
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>("[data-testid='distillation-worker-save']")
+        ?.click();
+    });
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+
+    const call = fetchMock.mock.calls.find(
+      ([url, init]) => String(url) === "/api/memory/distillation-worker" && init?.method === "PUT"
+    );
+    expect(call).toBeTruthy();
+    expect(call?.[1]?.body).toBe(
+      JSON.stringify({ enabled: true, intervalSeconds: 120, concurrency: 2 })
+    );
+  });
+
+  it("renders owner-scoped capture and injection controls", async () => {
+    const { container } = await renderDistillation();
+    const capture = container.querySelector(
+      "[data-testid='memory-capture-toggle'] [role='switch']"
+    ) as HTMLButtonElement | null;
+    const injection = container.querySelector(
+      "[data-testid='memory-injection-toggle'] [role='switch']"
+    ) as HTMLButtonElement | null;
+
+    expect(capture).toBeTruthy();
+    expect(capture?.getAttribute("role")).toBe("switch");
+    expect(capture?.getAttribute("aria-checked")).toBe("false");
+    expect(injection).toBeTruthy();
+    expect(injection?.getAttribute("role")).toBe("switch");
+    expect(injection?.getAttribute("aria-checked")).toBe("true");
   });
 });

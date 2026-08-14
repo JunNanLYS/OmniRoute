@@ -58,8 +58,26 @@ export async function GET(request: Request) {
     const service = getService();
     const isSearch = Boolean(parsed.data.q && parsed.data.q.trim().length > 0);
     const result = isSearch
-      ? await service.searchL1(owner, parsed.data)
-      : await service.listL1(owner, parsed.data);
+      ? await service.searchL1(owner, {
+          page: parsed.data.page,
+          limit: parsed.data.limit,
+          offset: parsed.data.offset,
+          apiKeyId: parsed.data.apiKeyId,
+          sceneName: parsed.data.sceneName,
+          type: parsed.data.type,
+          q: parsed.data.q,
+          includeDeleted: parsed.data.includeDeleted,
+        })
+      : await service.listL1(owner, {
+          page: parsed.data.page,
+          limit: parsed.data.limit,
+          offset: parsed.data.offset,
+          apiKeyId: parsed.data.apiKeyId,
+          sceneName: parsed.data.sceneName,
+          type: parsed.data.type,
+          q: parsed.data.q,
+          includeDeleted: parsed.data.includeDeleted,
+        });
     return NextResponse.json({
       data: result.data,
       pagination: buildPagination({

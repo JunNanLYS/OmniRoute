@@ -1,3 +1,4 @@
+import { resolveDistillationWorkerRuntimeConfig } from "./distillationWorkerSettings.ts";
 import { planPendingL1Task, type PlannedL1Task } from "./l1Scheduling.ts";
 import {
   enqueueDistillationTask,
@@ -19,8 +20,8 @@ interface ProductionL1EnqueuerOptions {
 }
 
 function isDistillationEnabled(env: NodeJS.ProcessEnv): boolean {
-  const interval = Number(env.MEMORY_DISTILLATION_INTERVAL);
-  return env.MEMORY_DISTILLATION_ENABLED === "true" && Number.isFinite(interval) && interval > 0;
+  const config = resolveDistillationWorkerRuntimeConfig(env);
+  return config.enabled && config.intervalSeconds > 0;
 }
 
 function formatConversation(records: readonly L0MessageRecord[]): string {

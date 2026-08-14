@@ -11,6 +11,8 @@
  * future per-owner settings store can replace the default environment adapter.
  */
 
+import { getSetting, softDeleteSetting, upsertSetting } from "../operations.ts";
+
 export interface MemoryPipelineSettings {
   /** L0 capture: persist last user + assistant visible text into the raw message store. */
   captureEnabled: boolean;
@@ -28,6 +30,13 @@ export interface MemoryPipelineSettings {
   recallTimeoutMs: number;
 }
 
+export type MemoryPipelineSettingsSourceLayer = "per-key" | "env" | "default";
+
+export interface ResolvedMemoryPipelineSettings extends MemoryPipelineSettings {
+  sourceLayer: MemoryPipelineSettingsSourceLayer;
+  apiKeyId: string | null;
+}
+
 export const DEFAULT_MEMORY_PIPELINE_SETTINGS: MemoryPipelineSettings = {
   captureEnabled: false,
   injectionEnabled: false,
@@ -37,6 +46,12 @@ export const DEFAULT_MEMORY_PIPELINE_SETTINGS: MemoryPipelineSettings = {
   totalCharBudget: 8000,
   recallTimeoutMs: 5000,
 };
+
+const PIPELINE_SETTINGS_PER_KEY_PREFIX = "pipeline.settings.per-key.";
+
+function pipelineSettingsKey(apiKeyId: string): string {
+  return `${PIPELINE_SETTINGS_PER_KEY_PREFIX}${apiKeyId}`;
+}
 
 export type MemoryPipelineSettingsResolver = (
   apiKeyId: string | null
@@ -128,27 +143,80 @@ function clampInt(value: unknown, fallback: number, min: number, max: number): n
  * Each environment variable is parsed strictly: "true"/"1"/"yes" -> true.
  * Any other value or missing -> false.
  */
-export function defaultMemoryPipelineSettingsResolver(
-  apiKeyId: string | null
-): MemoryPipelineSettings {
-  const captureEnabled = readBoolEnv("OMNIROUTE_MEMORY_CAPTURE_ENABLED") === true;
-  const injectionEnabled = readBoolEnv("OMNIROUTE_MEMORY_INJECTION_ENABLED") === true;
-
-  void apiKeyId;
-  return {
-    ...DEFAULT_MEMORY_PIPELINE_SETTINGS,
-    captureEnabled,
-    injectionEnabled,
-  };
-}
-
 function readBoolEnv(name: string): boolean | null {
   const raw = process.env[name];
   if (raw === undefined || raw === null) return null;
-  const v = String(raw).trim().toLowerCase();
-  if (v === "true" || v === "1" || v === "yes") return true;
-  if (v === "false" || v === "0" || v === "no" || v === "") return false;
+  const value = String(raw).trim().toLowerCase();
+  if (value === "true" || value === "1" || value === "yes") return true;
+  if (value === "false" || value === "0" || value === "no" || value === "") return false;
   return null;
+}
+
+function resolveEnvironmentPipelineSettings(): ResolvedMemoryPipelineSettings {
+  const captureEnv = readBoolEnv("OMNIROUTE_MEMORY_CAPTURE_ENABLED");
+  const injectionEnv = readBoolEnv("OMNIROUTE_MEMORY_INJECTION_ENABLED");
+  return {
+    ...DEFAULT_MEMORY_PIPELINE_SETTINGS,
+    captureEnabled: captureEnv === true,
+    injectionEnabled: injectionEnv === true,
+    sourceLayer: captureEnv !== null || injectionEnv !== null ? "env" : "default",
+    apiKeyId: null,
+  };
+}
+
+export function resolveMemoryPipelineSettingsConfig(
+  apiKeyId: string | null
+): ResolvedMemoryPipelineSettings {
+  const environment = resolveEnvironmentPipelineSettings();
+  if (!apiKeyId) return environment;
+
+  try {
+    const stored = getSetting(pipelineSettingsKey(apiKeyId));
+    if (stored) {
+      const parsed = JSON.parse(stored.value) as Partial<MemoryPipelineSettings>;
+      return {
+        ...normalizePipelineSettings(parsed),
+        sourceLayer: "per-key",
+        apiKeyId,
+      };
+    }
+  } catch {
+    // A malformed or unavailable settings row must fail closed to env/default.
+  }
+
+  return { ...environment, apiKeyId };
+}
+
+export function saveMemoryPipelineSettingsOverride(
+  apiKeyId: string,
+  input: Pick<MemoryPipelineSettings, "captureEnabled" | "injectionEnabled">
+): ResolvedMemoryPipelineSettings {
+  const current = resolveMemoryPipelineSettingsConfig(apiKeyId);
+  const normalized = normalizePipelineSettings({
+    ...current,
+    captureEnabled: input.captureEnabled,
+    injectionEnabled: input.injectionEnabled,
+  });
+  upsertSetting(pipelineSettingsKey(apiKeyId), JSON.stringify(normalized));
+  return { ...normalized, sourceLayer: "per-key", apiKeyId };
+}
+
+export function deleteMemoryPipelineSettingsOverride(apiKeyId: string): boolean {
+  const key = pipelineSettingsKey(apiKeyId);
+  if (!getSetting(key)) return false;
+  softDeleteSetting(key);
+  return true;
+}
+
+export function defaultMemoryPipelineSettingsResolver(
+  apiKeyId: string | null
+): MemoryPipelineSettings {
+  const {
+    sourceLayer: _sourceLayer,
+    apiKeyId: _apiKeyId,
+    ...settings
+  } = resolveMemoryPipelineSettingsConfig(apiKeyId);
+  return settings;
 }
 
 /**

@@ -1,6 +1,16 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
+type ValidatedJsonBodyOptions = {
+  /**
+   * Allow a request with no readable JSON body to be treated as {}.
+   *
+   * This is intentionally opt-in. Most endpoints require a body; schemas whose
+   * .default({}) makes an empty request valid must opt in explicitly.
+   */
+  allowEmpty?: boolean;
+};
+
 type ValidationErrorDetail = {
   field: string;
   message: string;
@@ -64,8 +74,11 @@ export function isValidationFailure<TData>(
  * do `if (!r.success) return r.response;` without knowing the envelope shape.
  */
 export type ValidatedJsonBodyResult<TData> =
-  | { success: true; data: TData }
-  | { success: false; response: NextResponse };
+  { success: true; data: TData } | { success: false; response: NextResponse };
+
+/**
+ * Options for `validatedJsonBody`.
+ */
 
 /**
  * Parse a request body as JSON and validate it against a Zod schema in one
@@ -85,24 +98,29 @@ export type ValidatedJsonBodyResult<TData> =
  */
 export async function validatedJsonBody<TSchema extends z.ZodTypeAny>(
   request: Request,
-  schema: TSchema
+  schema: TSchema,
+  options: ValidatedJsonBodyOptions = {}
 ): Promise<ValidatedJsonBodyResult<z.infer<TSchema>>> {
   let raw: unknown;
   try {
     raw = await request.json();
   } catch {
-    return {
-      success: false,
-      response: NextResponse.json(
-        {
-          error: {
-            message: "Invalid request",
-            details: [{ field: "body", message: "Invalid JSON body" }],
+    if (options.allowEmpty) {
+      raw = {};
+    } else {
+      return {
+        success: false,
+        response: NextResponse.json(
+          {
+            error: {
+              message: "Invalid request",
+              details: [{ field: "body", message: "Invalid JSON body" }],
+            },
           },
-        },
-        { status: 400 }
-      ),
-    };
+          { status: 400 }
+        ),
+      };
+    }
   }
 
   const validation = validateBody(schema, raw);

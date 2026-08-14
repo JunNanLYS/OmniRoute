@@ -3,6 +3,7 @@ import type {
   ExecutorExecuteResult,
   ProviderCredentials,
 } from "@omniroute/open-sse/executors/base.ts";
+import { resolveDistillationWorkerRuntimeConfig } from "./distillationWorkerSettings.ts";
 
 import {
   makeProductionBreakerHook,
@@ -343,7 +344,17 @@ function productionStartAllowed(
 export async function startProductionDistillationWorker(
   options: StartProductionOptions = {}
 ): Promise<boolean> {
-  const env = options.env ?? process.env;
+  const baseEnv = options.env ?? process.env;
+  const stored = resolveDistillationWorkerRuntimeConfig(baseEnv);
+  const env =
+    stored.sourceLayer === "stored"
+      ? {
+          ...baseEnv,
+          MEMORY_DISTILLATION_ENABLED: stored.enabled ? "true" : "false",
+          MEMORY_DISTILLATION_INTERVAL: String(stored.intervalSeconds),
+          MEMORY_DISTILLATION_CONCURRENCY: String(stored.concurrency),
+        }
+      : baseEnv;
   if (!productionStartAllowed(env, options.allowAutomatedTestProcess === true)) return false;
   const startWorker = options.startWorker ?? startDistillationWorker;
   return startWorker({

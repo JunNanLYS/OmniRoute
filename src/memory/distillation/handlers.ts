@@ -13,10 +13,9 @@
  * do NOT call the executor directly. They take a `callModel` adapter and
  *     the resolved selection, and return a `DistillationHandlerResult`.
  *
- * Tencent prompt integration is a dynamic-import inside each handler so
- * the prompt content is fetched lazily (zero cost when the prompt is not
- * used) and a missing/failing import is a structured error the worker can
- * classify, NOT a crash.
+ * Prompt text is kept inline and matched to each handler's canonical output
+ * contract. Tencent prompt modules require explicit adapters before they can
+ * replace these fallbacks safely.
  */
 
 import type { DistillationTask } from "./store.ts";
@@ -252,17 +251,10 @@ function regexFallback(raw: string): Array<{ kind: string; match: string }> {
 }
 
 async function loadTencentPrompt(kind: string): Promise<string> {
-  try {
-    const mod = (await import(`./prompts/tencent/${kind}.ts` as string).catch(() => null)) as {
-      TENCENT_PROMPT?: string;
-    } | null;
-    if (mod?.TENCENT_PROMPT) return mod.TENCENT_PROMPT;
-  } catch {
-    /* fallthrough */
-  }
-  // Fallback prompt — embedded so the worker is never blocked on the prompt
-  // module. Tencent integration can ship its real prompt in a follow-up commit
-  // without changing this file.
+  // Inline prompts are intentional: the former variable dynamic import pointed to
+  // a non-existent path/export and caused Turbopack Module-not-found warnings.
+  // Keep these protocol-matched fallbacks until explicit Tencent prompt adapters
+  // are wired with compatible input and output contracts.
   switch (kind) {
     case "L1_extract":
       return [

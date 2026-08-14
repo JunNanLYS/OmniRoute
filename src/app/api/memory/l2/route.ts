@@ -52,7 +52,15 @@ export async function GET(request: Request) {
 
   try {
     const service = getService();
-    const result = await service.listL2(owner, parsed.data);
+    const result = await service.listL2(owner, {
+      page: parsed.data.page,
+      limit: parsed.data.limit,
+      offset: parsed.data.offset,
+      apiKeyId: parsed.data.apiKeyId,
+      sceneName: parsed.data.sceneName,
+      q: parsed.data.q,
+      includeDeleted: parsed.data.includeDeleted,
+    });
     return NextResponse.json({
       data: result.data,
       pagination: buildPagination({

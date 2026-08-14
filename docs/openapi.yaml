@@ -852,6 +852,125 @@ paths:
         "200": { description: L3 persona mutated }
         "404": { description: L3 persona not found }
 
+  /api/memory/distillation-worker:
+    get:
+      tags: [Memory]
+      summary: Read process-global distillation worker settings and runtime status
+      security:
+        - ManagementSessionAuth: []
+      responses:
+        "200":
+          description: Effective worker settings and runtime status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/DistillationWorkerRuntimeSettings" }
+        "403": { description: Management scope required }
+    put:
+      tags: [Memory]
+      summary: Save worker settings and reconcile the in-process worker
+      security:
+        - ManagementSessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled, intervalSeconds, concurrency]
+              properties:
+                enabled: { type: boolean }
+                intervalSeconds: { type: integer, minimum: 1, maximum: 86400 }
+                concurrency: { type: integer, minimum: 1, maximum: 32 }
+              additionalProperties: false
+      responses:
+        "200":
+          description: Saved effective settings and runtime status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/DistillationWorkerRuntimeSettings" }
+        "403": { description: Management scope required }
+    delete:
+      tags: [Memory]
+      summary: Remove stored worker settings and restore environment/default fallback
+      security:
+        - ManagementSessionAuth: []
+      responses:
+        "200":
+          description: Effective fallback settings and runtime status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/DistillationWorkerRuntimeSettings" }
+        "403": { description: Management scope required }
+  /api/memory/pipeline-settings:
+    get:
+      tags: [Memory]
+      summary: Read owner-scoped memory capture and injection settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: apiKeyId
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Effective per-key settings with source layer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MemoryPipelineSettings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Cross-owner settings access denied }
+    put:
+      tags: [Memory]
+      summary: Set owner-scoped memory capture and injection settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: apiKeyId
+          in: query
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [captureEnabled, injectionEnabled]
+              properties:
+                captureEnabled: { type: boolean }
+                injectionEnabled: { type: boolean }
+              additionalProperties: false
+      responses:
+        "200": { description: Per-key settings stored }
+        "400": { description: Invalid settings body }
+        "403": { description: Cross-owner settings access denied }
+    delete:
+      tags: [Memory]
+      summary: Reset owner-scoped settings to environment or default fallback
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: apiKeyId
+          in: query
+          schema: { type: string }
+      responses:
+        "200": { description: Per-key override removed and fallback returned }
+        "403": { description: Cross-owner settings access denied }
+
   /api/memory/distillation-model:
     get:
       tags: [Memory]
@@ -6596,6 +6715,46 @@ components:
         lastModifiedBy: { type: string, enum: [user, pipeline] }
         editedByUser: { type: boolean }
         deletedAt: { type: [string, "null"], format: date-time }
+    DistillationWorkerRuntimeSettings:
+      type: object
+      required: [enabled, intervalSeconds, concurrency, sourceLayer, runtime]
+      properties:
+        enabled: { type: boolean }
+        intervalSeconds: { type: integer, minimum: 1, maximum: 86400 }
+        concurrency: { type: integer, minimum: 1, maximum: 32 }
+        sourceLayer: { type: string, enum: [stored, env, default] }
+        runtime:
+          type: object
+          required: [state, activeTasks, configuredIntervalSeconds, configuredConcurrency]
+          properties:
+            state: { type: string, enum: [stopped, starting, running, stopping] }
+            activeTasks: { type: integer, minimum: 0 }
+            configuredIntervalSeconds: { type: integer, nullable: true }
+            configuredConcurrency: { type: integer, nullable: true }
+    MemoryPipelineSettings:
+      type: object
+      required:
+        [
+          captureEnabled,
+          injectionEnabled,
+          sourceLayer,
+          apiKeyId,
+          l3CharBudget,
+          l2CharBudget,
+          l1CharBudget,
+          totalCharBudget,
+          recallTimeoutMs,
+        ]
+      properties:
+        captureEnabled: { type: boolean }
+        injectionEnabled: { type: boolean }
+        sourceLayer: { type: string, enum: [per-key, env, default] }
+        apiKeyId: { type: [string, "null"] }
+        l3CharBudget: { type: integer, minimum: 0, maximum: 64000 }
+        l2CharBudget: { type: integer, minimum: 0, maximum: 64000 }
+        l1CharBudget: { type: integer, minimum: 0, maximum: 64000 }
+        totalCharBudget: { type: integer, minimum: 0, maximum: 64000 }
+        recallTimeoutMs: { type: integer, minimum: 1, maximum: 60000 }
     DistillationSelector:
       type: object
       required: [provider, modelId, sourceLayer]

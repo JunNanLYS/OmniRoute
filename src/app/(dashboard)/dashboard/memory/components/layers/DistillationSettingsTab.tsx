@@ -2,7 +2,15 @@
 
 import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { AppleButton, AppleCard, AppleField, AppleSelect, AppleSurface } from "@/shared/components";
+import {
+  AppleButton,
+  AppleCard,
+  AppleField,
+  AppleInput,
+  AppleSelect,
+  AppleSurface,
+  Toggle,
+} from "@/shared/components";
 import { useNotificationStore } from "@/store/notificationStore";
 import {
   appendOwnerQuery,
@@ -12,6 +20,8 @@ import {
   useDistillationDlq,
   useDistillationModel,
   useDistillationUsage,
+  useDistillationWorker,
+  useMemoryPipelineSettings,
   useProviderModels,
   type SourceLayer,
 } from "../../hooks/useMemoryLayersApi";
@@ -21,6 +31,18 @@ const LAYER_LABEL_KEY: Record<SourceLayer, string> = {
   global: "sourceLayerGlobal",
   env: "sourceLayerEnv",
   auto: "sourceLayerAuto",
+};
+
+const PIPELINE_SOURCE_LABEL_KEY: Record<"per-key" | "env" | "default", string> = {
+  "per-key": "pipelineSourcePerKey",
+  env: "pipelineSourceEnv",
+  default: "pipelineSourceDefault",
+};
+
+const WORKER_SOURCE_LABEL_KEY: Record<"stored" | "env" | "default", string> = {
+  stored: "workerSourceStored",
+  env: "workerSourceEnv",
+  default: "workerSourceDefault",
 };
 
 type Scope = "self" | "global";
@@ -33,6 +55,7 @@ export default function DistillationSettingsTab({ apiKeyId }: Props) {
   const tDist = useTranslations("memory.distillation");
   const tCommon = useTranslations("memory.common");
   const notify = useNotificationStore();
+  const pipeline = useMemoryPipelineSettings({ apiKeyId });
   const dist = useDistillationModel({ apiKeyId });
   const dlq = useDistillationDlq({ apiKeyId });
   const usage = useDistillationUsage({ apiKeyId });
@@ -40,12 +63,35 @@ export default function DistillationSettingsTab({ apiKeyId }: Props) {
   const [modelId, setModelId] = useState("");
   const [scope, setScope] = useState<Scope>("self");
   const [busy, setBusy] = useState(false);
+  const [pipelineBusy, setPipelineBusy] = useState(false);
+  const [captureEnabled, setCaptureEnabled] = useState(false);
+  const [injectionEnabled, setInjectionEnabled] = useState(false);
+  const worker = useDistillationWorker();
+  const [workerBusy, setWorkerBusy] = useState(false);
+  const [workerEnabled, setWorkerEnabled] = useState(false);
+  const [workerInterval, setWorkerInterval] = useState("60");
+  const [workerConcurrency, setWorkerConcurrency] = useState("3");
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const providerModels = useProviderModels(provider || null);
 
   // Fill the form fields once when the selector data first arrives, without
   // resetting user edits afterwards. Render-time adjustment (the "storing
   // information from previous renders" pattern) instead of setState-in-effect.
+  const [lastPipelineData, setLastPipelineData] = useState(pipeline.data);
+  if (pipeline.data && pipeline.data !== lastPipelineData) {
+    setLastPipelineData(pipeline.data);
+    setCaptureEnabled(pipeline.data.captureEnabled);
+    setInjectionEnabled(pipeline.data.injectionEnabled);
+  }
+
+  const [lastWorkerData, setLastWorkerData] = useState(worker.data);
+  if (worker.data && worker.data !== lastWorkerData) {
+    setLastWorkerData(worker.data);
+    setWorkerEnabled(worker.data.enabled);
+    setWorkerInterval(String(worker.data.intervalSeconds));
+    setWorkerConcurrency(String(worker.data.concurrency));
+  }
+
   const [lastDistData, setLastDistData] = useState(dist.data);
   if (dist.data && dist.data !== lastDistData) {
     setLastDistData(dist.data);
@@ -59,6 +105,71 @@ export default function DistillationSettingsTab({ apiKeyId }: Props) {
     () => (dist.data ? tDist(LAYER_LABEL_KEY[dist.data.sourceLayer]) : "—"),
     [dist.data, tDist]
   );
+
+  const handlePipelineSave = async () => {
+    setPipelineBusy(true);
+    const result = await putJson(appendOwnerQuery("/api/memory/pipeline-settings", apiKeyId), {
+      captureEnabled,
+      injectionEnabled,
+    });
+    setPipelineBusy(false);
+    if (result === null) {
+      notify.error(tDist("pipelineSaveFailed"));
+      return;
+    }
+    notify.success(tDist("pipelineSaved"));
+    await pipeline.reload();
+  };
+
+  const handlePipelineReset = async () => {
+    setPipelineBusy(true);
+    const result = await deleteJson(appendOwnerQuery("/api/memory/pipeline-settings", apiKeyId));
+    setPipelineBusy(false);
+    if (result === null) {
+      notify.error(tDist("pipelineResetFailed"));
+      return;
+    }
+    notify.success(tDist("pipelineReset"));
+    await pipeline.reload();
+  };
+
+  const handleWorkerSave = async () => {
+    const interval = Number(workerInterval);
+    const concurrency = Number(workerConcurrency);
+    if (!Number.isInteger(interval) || interval < 1 || interval > 86_400) {
+      notify.error(tDist("workerInvalidInterval"));
+      return;
+    }
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) {
+      notify.error(tDist("workerInvalidConcurrency"));
+      return;
+    }
+    setWorkerBusy(true);
+    const result = await putJson("/api/memory/distillation-worker", {
+      enabled: workerEnabled,
+      intervalSeconds: interval,
+      concurrency,
+    });
+    setWorkerBusy(false);
+    if (result === null) {
+      notify.error(tDist("workerSaveFailed"));
+      return;
+    }
+    notify.success(tDist("workerSaved"));
+    await worker.reload();
+  };
+
+  const handleWorkerReset = async () => {
+    setWorkerBusy(true);
+    const result = await deleteJson("/api/memory/distillation-worker");
+    setWorkerBusy(false);
+    if (result === null) {
+      notify.error(tDist("workerResetFailed"));
+      return;
+    }
+    notify.success(tDist("workerReset"));
+    await worker.reload();
+  };
 
   const handleApply = async () => {
     setBusy(true);
@@ -114,6 +225,190 @@ export default function DistillationSettingsTab({ apiKeyId }: Props) {
         <h2 className="text-base font-semibold text-text-main">{tDist("title")}</h2>
         <p className="text-xs text-text-muted mt-1 max-w-xl">{tDist("description")}</p>
       </AppleSurface>
+
+      <AppleCard data-testid="memory-pipeline-settings" className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-text-main">{tDist("pipelineTitle")}</h3>
+            <p className="mt-1 max-w-2xl text-xs text-text-muted">{tDist("pipelineDescription")}</p>
+          </div>
+          {pipeline.data ? (
+            <span
+              className="inline-flex items-center rounded-full bg-primary/15 px-2 py-1 text-[11px] text-primary"
+              data-testid="memory-pipeline-source"
+              data-source-layer={pipeline.data.sourceLayer}
+            >
+              {tDist(PIPELINE_SOURCE_LABEL_KEY[pipeline.data.sourceLayer])}
+            </span>
+          ) : null}
+        </div>
+
+        {pipeline.isLoading ? (
+          <p className="text-sm text-text-muted" role="status">
+            {tCommon("loading")}
+          </p>
+        ) : pipeline.error || !pipeline.data ? (
+          <p className="text-sm text-red-500" role="alert">
+            {tDist("pipelineLoadFailed")}
+          </p>
+        ) : (
+          <>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div
+                className="rounded-xl border border-border bg-surface/60 p-4"
+                data-testid="memory-capture-toggle"
+              >
+                <Toggle
+                  checked={captureEnabled}
+                  onChange={setCaptureEnabled}
+                  disabled={pipelineBusy}
+                  label={tDist("captureLabel")}
+                  description={tDist("captureDescription")}
+                  ariaLabel={tDist("captureLabel")}
+                />
+              </div>
+              <div
+                className="rounded-xl border border-border bg-surface/60 p-4"
+                data-testid="memory-injection-toggle"
+              >
+                <Toggle
+                  checked={injectionEnabled}
+                  onChange={setInjectionEnabled}
+                  disabled={pipelineBusy}
+                  label={tDist("injectionLabel")}
+                  description={tDist("injectionDescription")}
+                  ariaLabel={tDist("injectionLabel")}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              {tDist("pipelineCostWarning")}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <AppleButton
+                size="sm"
+                onClick={handlePipelineSave}
+                disabled={pipelineBusy}
+                data-testid="memory-pipeline-save"
+              >
+                {tCommon("save")}
+              </AppleButton>
+              <AppleButton
+                size="sm"
+                variant="tertiary"
+                onClick={handlePipelineReset}
+                disabled={pipelineBusy || pipeline.data.sourceLayer !== "per-key"}
+                data-testid="memory-pipeline-reset"
+              >
+                {tDist("pipelineUseFallback")}
+              </AppleButton>
+            </div>
+          </>
+        )}
+      </AppleCard>
+
+      <AppleCard data-testid="distillation-worker-settings" className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-text-main">{tDist("workerTitle")}</h3>
+            <p className="mt-1 max-w-2xl text-xs text-text-muted">{tDist("workerDescription")}</p>
+          </div>
+          {worker.data ? (
+            <span
+              className="inline-flex items-center rounded-full bg-primary/15 px-2 py-1 text-[11px] text-primary"
+              data-testid="distillation-worker-source"
+              data-source-layer={worker.data.sourceLayer}
+            >
+              {tDist(WORKER_SOURCE_LABEL_KEY[worker.data.sourceLayer])}
+            </span>
+          ) : null}
+        </div>
+
+        {worker.isLoading ? (
+          <p className="text-sm text-text-muted" role="status">
+            {tCommon("loading")}
+          </p>
+        ) : worker.error || !worker.data ? (
+          <p className="text-sm text-red-500" role="alert">
+            {tDist("workerLoadFailed")}
+          </p>
+        ) : (
+          <>
+            <div
+              className="rounded-xl border border-border bg-surface/60 p-4"
+              data-testid="distillation-worker-toggle"
+            >
+              <Toggle
+                checked={workerEnabled}
+                onChange={setWorkerEnabled}
+                disabled={workerBusy}
+                label={tDist("workerEnableLabel")}
+                description={tDist("workerEnableDescription")}
+                ariaLabel={tDist("workerEnableLabel")}
+              />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <AppleField label={tDist("workerIntervalLabel")} hint={tDist("workerIntervalHint")}>
+                <AppleInput
+                  type="number"
+                  min={1}
+                  max={86_400}
+                  step={1}
+                  value={workerInterval}
+                  onChange={(event) => setWorkerInterval(event.target.value)}
+                  disabled={workerBusy}
+                  data-testid="distillation-worker-interval"
+                />
+              </AppleField>
+              <AppleField
+                label={tDist("workerConcurrencyLabel")}
+                hint={tDist("workerConcurrencyHint")}
+              >
+                <AppleInput
+                  type="number"
+                  min={1}
+                  max={32}
+                  step={1}
+                  value={workerConcurrency}
+                  onChange={(event) => setWorkerConcurrency(event.target.value)}
+                  disabled={workerBusy}
+                  data-testid="distillation-worker-concurrency"
+                />
+              </AppleField>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-xs text-text-muted">
+              <span data-testid="distillation-worker-state">
+                {tDist("workerState", { state: tDist(`workerState.${worker.data.runtime.state}`) })}
+              </span>
+              <span data-testid="distillation-worker-active">
+                {tDist("workerActiveTasks", { count: worker.data.runtime.activeTasks })}
+              </span>
+            </div>
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              {tDist("workerCostWarning")}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <AppleButton
+                size="sm"
+                onClick={handleWorkerSave}
+                disabled={workerBusy}
+                data-testid="distillation-worker-save"
+              >
+                {tCommon("save")}
+              </AppleButton>
+              <AppleButton
+                size="sm"
+                variant="tertiary"
+                onClick={handleWorkerReset}
+                disabled={workerBusy || worker.data.sourceLayer === "default"}
+                data-testid="distillation-worker-reset"
+              >
+                {tDist("workerUseFallback")}
+              </AppleButton>
+            </div>
+          </>
+        )}
+      </AppleCard>
 
       <AppleCard data-testid="distillation-effective" className="space-y-3">
         {dist.isLoading ? (

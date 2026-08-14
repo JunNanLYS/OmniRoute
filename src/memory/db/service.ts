@@ -64,6 +64,11 @@ import {
   type PersistentDistillationDlqEntry,
 } from "./repositories/distillation.ts";
 import { getSetting, softDeleteSetting, upsertSetting } from "../operations.ts";
+import {
+  deleteMemoryPipelineSettingsOverride,
+  resolveMemoryPipelineSettingsConfig,
+  saveMemoryPipelineSettingsOverride,
+} from "../integration/settings.ts";
 import { readL0CaptureTelemetry } from "./repositories/l0CaptureTelemetry.ts";
 import type { L0Message, L1Memory, L2Scene, L3Persona } from "../types.ts";
 import type {
@@ -651,6 +656,21 @@ export function createFourLayerService(): MemoryFourLayerService {
           .join(":")}`,
       });
       return { enqueued: 1 };
+    },
+
+    async getMemoryPipelineSettings(scope: MemoryRequestScope) {
+      assertScope(scope);
+      return resolveMemoryPipelineSettingsConfig(scope.ownerApiKeyId);
+    },
+
+    async setMemoryPipelineSettings(scope: MemoryRequestScope, data) {
+      assertScope(scope);
+      return saveMemoryPipelineSettingsOverride(scope.ownerApiKeyId, data);
+    },
+
+    async deleteMemoryPipelineSettings(scope: MemoryRequestScope) {
+      assertScope(scope);
+      return deleteMemoryPipelineSettingsOverride(scope.ownerApiKeyId);
     },
 
     async getDistillationSelector(context: MemoryServiceContext, apiKeyId?: string | null) {

@@ -190,3 +190,74 @@ describe("recall — NOOP_RECALL_PROVIDER", () => {
     assert.deepEqual(out.layers.l3, []);
   });
 });
+describe("recall — independent layer degradation", () => {
+  it("isolates one timeout to that layer while other layers still return", async () => {
+    const provider: RecallProvider = {
+      fetchL3: async () => [{ id: "L3-1", title: "stable", content: "persona" }],
+      fetchL2: async () => new Promise(() => {}),
+      fetchL1: async () => [{ id: "L1-1", content: "fact", score: 1, tags: [] }],
+    };
+    setRecallProvider(provider);
+    try {
+      const out = await recallLayeredContext(
+        { ownerId: "owner", sessionId: "session", query: "query" },
+        { timeoutMs: 25 }
+      );
+      assert.equal(out.l2Status, "timeout");
+      assert.deepEqual(out.layers.l2, []);
+      assert.equal(out.l3Status, "ok");
+      assert.equal(out.layers.l3.length, 1);
+      assert.equal(out.l1Status, "ok");
+      assert.equal(out.layers.l1.length, 1);
+    } finally {
+      resetRecallProviderForTests();
+    }
+  });
+
+  it("keeps successful layers when another layer throws synchronously", async () => {
+    const provider: RecallProvider = {
+      fetchL3: () => {
+        throw new Error("sync failure");
+      },
+      fetchL2: async () => [{ id: "L2-1", title: "nav", summary: "scene" }],
+      fetchL1: async () => [],
+    };
+    setRecallProvider(provider);
+    try {
+      const out = await recallLayeredContext(
+        { ownerId: "owner", sessionId: "session", query: "query" },
+        { timeoutMs: 100 }
+      );
+      assert.equal(out.l3Status, "error");
+      assert.equal(out.l2Status, "ok");
+      assert.equal(out.l1Status, "empty");
+    } finally {
+      resetRecallProviderForTests();
+    }
+  });
+
+  it("enforces the L3 cap independently of L2 and L1 limits", async () => {
+    const provider: RecallProvider = {
+      fetchL3: async () =>
+        Array.from({ length: 70 }, (_, i) => ({
+          id: `L3-${i}`,
+          title: `title-${i}`,
+          content: `content-${i}`,
+        })),
+      fetchL2: async () => [],
+      fetchL1: async () => [],
+    };
+    setRecallProvider(provider);
+    try {
+      const out = await recallLayeredContext(
+        { ownerId: "owner", sessionId: "session", query: "query" },
+        { timeoutMs: 100 }
+      );
+      assert.equal(out.layers.l3.length, 64);
+      assert.equal(out.layers.l3[63]?.id, "L3-63");
+      assert.equal(out.l3Status, "ok");
+    } finally {
+      resetRecallProviderForTests();
+    }
+  });
+});

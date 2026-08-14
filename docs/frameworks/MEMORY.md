@@ -53,7 +53,7 @@ Memory capture and injection are **off by default**. The pipeline settings shape
 - `captureEnabled` — when `true`, the last user + assistant visible text per turn is written to L0 (async, never blocks the response).
 - `injectionEnabled` — when `true`, the chat pipeline injects L3 (cacheable system suffix) + L2 (navigation) + L1 (dynamic top-5) before the final user prompt.
 
-Both default to `false`. The default resolver reads only two env vars — `OMNIROUTE_MEMORY_CAPTURE_ENABLED` and `OMNIROUTE_MEMORY_INJECTION_ENABLED` — with strict parsing (`true`/`1`/`yes` enable; anything else, including the removed v3 `MEMORY_ENABLED` and its aliases, is ignored). A future per-owner settings store can replace the resolver via the `setMemoryPipelineSettingsResolver()` seam; the recall provider is swappable via `setRecallProvider()`.
+Both default to `false`. Operators can change them for the selected owner under **Dashboard → Memory → Settings**; the per-key row takes effect immediately and overrides the environment fallback. Without a per-key row, the resolver reads only `OMNIROUTE_MEMORY_CAPTURE_ENABLED` and `OMNIROUTE_MEMORY_INJECTION_ENABLED` with strict parsing (`true`/`1`/`yes` enable; anything else, including the removed v3 `MEMORY_ENABLED` and its aliases, is ignored). `DELETE /api/memory/pipeline-settings` removes the per-key override and restores the environment/default fallback. The recall provider remains swappable via `setRecallProvider()`.
 
 ### PII flags
 
@@ -71,7 +71,7 @@ When a request is a sub-call within the memory subsystem itself (e.g. a backgrou
 
 L1 memories and L2 scenes are produced by a **background distillation worker** that scans L0 turns and writes new L1/L2 rows, and periodically distills L3 personas. The worker runs out-of-band; the chat pipeline never waits for it. Worker lifecycle lives in `src/memory/distillation/` (worker, scheduler, permit, executor, selector) and `src/memory/integration/distillationRuntime.ts`.
 
-The worker is **doubly opt-in**: `MEMORY_DISTILLATION_ENABLED=true` AND a positive `MEMORY_DISTILLATION_INTERVAL` (seconds, default 60). Concurrency is bounded by `MEMORY_DISTILLATION_CONCURRENCY` (default 3). Tasks are persisted in `task_queue` with kinds `L0_chunk_embed`, `L1_extract`, `L2_scene`, `L3_persona` and statuses `queued` → `claimed` → `running` → `succeeded` | `failed_retry` | `failed_dlq`. Task idempotency keys (`idempotency_key`) prevent duplicate enqueues; L1 `pipeline_key` makes pipeline application exactly-once; distillation usage is billed at most once per task.
+The worker is **doubly opt-in by default**: `MEMORY_DISTILLATION_ENABLED=true` AND a positive `MEMORY_DISTILLATION_INTERVAL` (seconds, default 60). Concurrency is bounded by `MEMORY_DISTILLATION_CONCURRENCY` (default 3). Management users may instead save process-global runtime settings under **Dashboard → Memory → Settings** via `/api/memory/distillation-worker`; the stored row overrides those three environment values, starts/stops the in-process worker immediately, and survives restarts. The HMAC secret remains server-only. Tasks are persisted in `task_queue` with kinds `L0_chunk_embed`, `L1_extract`, `L2_scene`, `L3_persona` and statuses `queued` → `claimed` → `running` → `succeeded` | `failed_retry` | `failed_dlq`. Task idempotency keys (`idempotency_key`) prevent duplicate enqueues; L1 `pipeline_key` makes pipeline application exactly-once; distillation usage is billed at most once per task.
 
 The distillation model selector chain (`src/memory/distillation/selector.ts`, first hit wins):
 
@@ -149,6 +149,12 @@ All routes derive the owner from the auth subject: a dashboard session (manageme
 
 | Method   | Path                                 | Description                                                                                                                             |
 | -------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/memory/pipeline-settings`      | Read effective owner-scoped capture/injection settings and their `per-key`/`env`/`default` source layer.                                |
+| `PUT`    | `/api/memory/pipeline-settings`      | Save `{ captureEnabled, injectionEnabled }` for the selected API key owner.                                                             |
+| `DELETE` | `/api/memory/pipeline-settings`      | Remove the selected owner's override and return the environment/default fallback.                                                       |
+| GET      | /api/memory/distillation-worker      | Read process-global worker settings and current in-process runtime status (management auth only).                                       |
+| PUT      | /api/memory/distillation-worker      | Save { enabled, intervalSeconds, concurrency } and reconcile the worker immediately (management auth only).                             |
+| DELETE   | /api/memory/distillation-worker      | Remove the stored runtime row and return to environment/default fallback (management auth only).                                        |
 | `GET`    | `/api/memory/distillation-model`     | Inspect the effective selector — returns `{ provider, modelId, sourceLayer, scope, apiKeyId }` per tier (`self`/`global`/`env`/`auto`). |
 | `PUT`    | `/api/memory/distillation-model`     | Set a selector — body: `{ provider, modelId, scope: "self"\|"global", apiKeyId? }`. Management only for `apiKeyId` targeting.           |
 | `DELETE` | `/api/memory/distillation-model`     | Clear a selector tier — body: `{ scope, apiKeyId? }`.                                                                                   |
@@ -251,7 +257,7 @@ There is no `compact`/`summarize`/`reset` endpoint and no script that deletes `m
   - `src/memory/recall/` + `src/memory/retrieval/` — owner-scoped recall facade and FTS5/RRF retrieval
   - `src/memory/integration/` — pipeline seams: settings resolver, L0 capture, injection transformer, distillation runtime/queue
   - `src/memory/vectorStore.ts` — best-effort sqlite-vec (RRF k=60); FTS5 remains authoritative
-  - `src/app/api/memory/{l0,l1,l2,l3,distillation-model,distillation-model/dlq}/route.ts`
+  - `src/app/api/memory/{l0,l1,l2,l3,pipeline-settings,distillation-model,distillation-model/dlq}/route.ts`
   - `open-sse/handlers/chatCore.ts` — capture/injection wiring; `chatCore/headers.ts::isNoMemoryRequested`
   - `open-sse/mcp-server/tools/memoryTools.ts` — five owner-scoped read tools
 

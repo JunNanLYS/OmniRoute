@@ -37,6 +37,7 @@ import type {
   L3Regenerate,
   DistillationPut,
   DistillationDlqRetry,
+  MemoryPipelineSettingsPut,
 } from "@/shared/schemas/memoryFourLayer";
 
 // ────────────────────────────── Domain entities ──────────────────────────────
@@ -117,6 +118,18 @@ export interface MemoryL3 {
   lastModifiedBy: "user" | "pipeline";
   editedByUser: boolean;
   deletedAt: string | null;
+}
+
+export interface MemoryPipelineConfiguration {
+  captureEnabled: boolean;
+  injectionEnabled: boolean;
+  l3CharBudget: number;
+  l2CharBudget: number;
+  l1CharBudget: number;
+  totalCharBudget: number;
+  recallTimeoutMs: number;
+  sourceLayer: "per-key" | "env" | "default";
+  apiKeyId: string | null;
 }
 
 export interface DistillationSelector {
@@ -246,6 +259,14 @@ export interface MemoryFourLayerService {
   deleteL3(scope: MemoryRequestScope, id: string, mode: L3DeleteBody["mode"]): Promise<boolean>;
   restoreL3(scope: MemoryRequestScope, id: string): Promise<MemoryL3 | null>;
   regenerateL3(scope: MemoryRequestScope, data: L3Regenerate): Promise<RegenerateEnqueueResult>;
+
+  // Capture + recall pipeline settings
+  getMemoryPipelineSettings(scope: MemoryRequestScope): Promise<MemoryPipelineConfiguration>;
+  setMemoryPipelineSettings(
+    scope: MemoryRequestScope,
+    data: MemoryPipelineSettingsPut
+  ): Promise<MemoryPipelineConfiguration>;
+  deleteMemoryPipelineSettings(scope: MemoryRequestScope): Promise<boolean>;
 
   // Distillation-model
   getDistillationSelector(
@@ -416,6 +437,15 @@ class NotImplementedService implements MemoryFourLayerService {
     return this.fail();
   }
   regenerateL3(): Promise<RegenerateEnqueueResult> {
+    return this.fail();
+  }
+  getMemoryPipelineSettings(): Promise<MemoryPipelineConfiguration> {
+    return this.fail();
+  }
+  setMemoryPipelineSettings(): Promise<MemoryPipelineConfiguration> {
+    return this.fail();
+  }
+  deleteMemoryPipelineSettings(): Promise<boolean> {
     return this.fail();
   }
   getDistillationSelector(): Promise<DistillationSelector> {

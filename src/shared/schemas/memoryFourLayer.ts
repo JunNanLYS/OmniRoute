@@ -214,6 +214,27 @@ export type L3Upsert = z.infer<typeof L3UpsertSchema>;
 export type L3DeleteBody = z.infer<typeof L3DeleteBodySchema>;
 export type L3Regenerate = z.infer<typeof L3RegenerateSchema>;
 
+/** Owner-scoped capture + recall switches for the four-layer pipeline. */
+export const MemoryPipelineSettingsPutSchema = z
+  .object({
+    captureEnabled: z.boolean(),
+    injectionEnabled: z.boolean(),
+  })
+  .strict();
+
+export type MemoryPipelineSettingsPut = z.infer<typeof MemoryPipelineSettingsPutSchema>;
+
+/** Process-global background worker controls. Requires management auth. */
+export const DistillationWorkerPutSchema = z
+  .object({
+    enabled: z.boolean(),
+    intervalSeconds: z.number().int().min(1).max(86_400),
+    concurrency: z.number().int().min(1).max(32),
+  })
+  .strict();
+
+export type DistillationWorkerPut = z.infer<typeof DistillationWorkerPutSchema>;
+
 /**
  * Distillation-model — the LLM selector. Resolution order (first hit wins):
  *

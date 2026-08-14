@@ -1037,12 +1037,18 @@ API key. See [Memory System](../frameworks/MEMORY.md) for the full architecture.
 
 ### Maintenance endpoints
 
-| Method | Path                             | Description                                                                                                     |
-| ------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `POST` | `/api/memory/regenerate`         | Force re-distillation of one L0 batch — body: `{apiKeyId, conversationId, batchId}`                             |
-| `GET`  | `/api/memory/distillation-model` | Inspect the distillation selector chain — returns `{enabled, model, source, candidates}`                        |
-| `PUT`  | `/api/memory/distillation-model` | Override the distillation model — body: `{model: "provider/model" \| null}`                                     |
-| `GET`  | `/api/memory/distillation/dlq`   | List failed distillation batches — `?apiKeyId=`, `?conversationId=`, `?since=`, `?limit=` (default 50, max 500) |
+| Method   | Path                             | Description                                                                                                     |
+| -------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `POST`   | `/api/memory/regenerate`         | Force re-distillation of one L0 batch — body: `{apiKeyId, conversationId, batchId}`                             |
+| `GET`    | `/api/memory/pipeline-settings`  | Read effective owner-scoped capture/injection settings                                                          |
+| `PUT`    | `/api/memory/pipeline-settings`  | Save `{captureEnabled, injectionEnabled}` for the selected API key                                              |
+| `DELETE` | `/api/memory/pipeline-settings`  | Reset the selected API key to environment/default fallback                                                      |
+| GET      | /api/memory/distillation-worker  | Read process-global worker settings/status (management auth)                                                    |
+| PUT      | /api/memory/distillation-worker  | Save {enabled,intervalSeconds,concurrency} and reconcile it immediately (management auth)                       |
+| DELETE   | /api/memory/distillation-worker  | Remove stored runtime settings and restore environment/default (management auth)                                |
+| `GET`    | `/api/memory/distillation-model` | Inspect the distillation selector chain — returns `{enabled, model, source, candidates}`                        |
+| `PUT`    | `/api/memory/distillation-model` | Override the distillation model — body: `{model: "provider/model" \| null}`                                     |
+| `GET`    | `/api/memory/distillation/dlq`   | List failed distillation batches — `?apiKeyId=`, `?conversationId=`, `?since=`, `?limit=` (default 50, max 500) |
 
 **Auth:** management session/API key (`requireManagementAuth`) for all routes. Per-API-key access via the `memory.inject` scope is honored on `/api/memory/l0` reads (L1/L2/L3 writes always require management auth). All error responses are routed through `sanitizeErrorMessage()` (`open-sse/utils/error.ts`) — no raw `err.stack` / `err.message` in response bodies.
 
@@ -1376,6 +1382,9 @@ search but should be edited in the canonical section above.
 | `GET`    | `/api/memory/l3`                 | Read the L3 singleton (branch `chat` or `code` + scratchpad + guideId) |
 | `PUT`    | `/api/memory/l3`                 | Replace the L3 singleton                                               |
 | `POST`   | `/api/memory/regenerate`         | Force re-distillation of one L0 batch                                  |
+| `GET`    | `/api/memory/pipeline-settings`  | Read effective owner-scoped capture/injection settings                 |
+| `PUT`    | `/api/memory/pipeline-settings`  | Save `{captureEnabled, injectionEnabled}` for the selected API key     |
+| `DELETE` | `/api/memory/pipeline-settings`  | Reset the selected API key to environment/default fallback             |
 | `GET`    | `/api/memory/distillation-model` | Inspect the distillation selector chain                                |
 | `PUT`    | `/api/memory/distillation-model` | Override the distillation model                                        |
 | `GET`    | `/api/memory/distillation/dlq`   | List failed distillation batches                                       |

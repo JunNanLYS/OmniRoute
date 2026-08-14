@@ -50,6 +50,10 @@ export function softDeleteSetting(key: string): void {
     .run(key);
 }
 
+export function deleteSetting(key: string): void {
+  getMemoryDbInstance().prepare("DELETE FROM memory_settings WHERE key = ?").run(key);
+}
+
 export function getEmbeddingMeta(): EmbeddingMeta | null {
   const row = getMemoryDbInstance().prepare("SELECT * FROM embedding_meta WHERE id = 1").get() as
     EmbeddingMetaRow | undefined;

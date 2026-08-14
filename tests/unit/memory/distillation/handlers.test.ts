@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { DEFAULT_HANDLERS, clampPrompt } from "../../../../src/memory/distillation/handlers.ts";
 import type { DistillationTask } from "../../../../src/memory/distillation/store.ts";
 
@@ -286,4 +289,19 @@ describe("distillation/handlers — L0_chunk_embed", () => {
       assert.equal(payload.summary, "tiny");
     }
   });
+});
+
+it("does not use an unresolved variable dynamic import for Tencent prompts", () => {
+  const source = fs.readFileSync(
+    path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../../../src/memory/distillation/handlers.ts"
+    ),
+    "utf8"
+  );
+  assert.doesNotMatch(
+    source,
+    /import\(`\.\/prompts\/tencent\/\$\{kind\}\.ts`/,
+    "variable prompt imports are statically resolved by Turbopack and emit Module-not-found warnings"
+  );
 });
