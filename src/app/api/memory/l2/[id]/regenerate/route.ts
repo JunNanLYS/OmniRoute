@@ -27,7 +27,7 @@ export async function POST(request: Request, props: { params: Promise<{ id: stri
   const { id } = await props.params;
 
   // Body is optional — Zod's `.default({})` makes this safe.
-  const body = await validatedJsonBody(request, L2RegenerateSchema);
+  const body = await validatedJsonBody(request, L2RegenerateSchema, { emptyBody: {} });
   if (!body.success) return body.response;
 
   try {

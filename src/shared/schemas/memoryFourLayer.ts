@@ -10,8 +10,8 @@
  *  - All input schemas are `.strict()` (reject unknown fields).
  *  - Owner/identity is derived from the auth subject (Never from query/body).
  *  - All schemas return 400 on failure via `validatedJsonBody`.
- *  - Pagination, owner filters, lineage filters, and "include deleted / recycle"
- *    are common query knobs and exposed as helpers (`memoryListingQuery`).
+ *  - Pagination, owner selection, and recycle filters are common. Each layer
+ *    extends that base only with filters its production storage actually applies.
  */
 import { z } from "zod";
 
@@ -38,26 +38,45 @@ export const L1TypeSchema = z.enum(L1_TYPE_VALUES);
  */
 export const MemoryRecycleScopeSchema = z.enum(["active", "deleted", "any"]).default("active");
 
-/**
- * Common listing query — pagination, owner filter, lineage filter, recycle.
- * Reused by L0/L1/L2/L3 list endpoints.
- */
-export const memoryListingQuerySchema = z
+const memoryListingBaseShape = {
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  offset: z.coerce.number().int().min(0).optional(),
+  apiKeyId: z.string().optional(),
+  includeDeleted: MemoryRecycleScopeSchema.optional(),
+};
+
+export const L0ListingQuerySchema = z
   .object({
-    page: z.coerce.number().int().min(1).default(1),
-    limit: z.coerce.number().int().min(1).max(100).default(20),
-    offset: z.coerce.number().int().min(0).optional(),
-    apiKeyId: z.string().optional(),
+    ...memoryListingBaseShape,
     sessionId: z.string().optional(),
-    sceneName: z.string().optional(),
-    sourceId: z.string().optional(),
-    type: L1TypeSchema.optional(),
     q: z.string().optional(),
-    includeDeleted: MemoryRecycleScopeSchema.optional(),
   })
   .strict();
 
-export type MemoryListingQuery = z.infer<typeof memoryListingQuerySchema>;
+export const L1ListingQuerySchema = z
+  .object({
+    ...memoryListingBaseShape,
+    sceneName: z.string().optional(),
+    type: L1TypeSchema.optional(),
+    q: z.string().optional(),
+  })
+  .strict();
+
+export const L2ListingQuerySchema = z
+  .object({
+    ...memoryListingBaseShape,
+    sceneName: z.string().optional(),
+    q: z.string().optional(),
+  })
+  .strict();
+
+export const L3ListingQuerySchema = z.object(memoryListingBaseShape).strict();
+
+export type L0ListingQuery = Partial<z.infer<typeof L0ListingQuerySchema>>;
+export type L1ListingQuery = Partial<z.infer<typeof L1ListingQuerySchema>>;
+export type L2ListingQuery = Partial<z.infer<typeof L2ListingQuerySchema>>;
+export type L3ListingQuery = Partial<z.infer<typeof L3ListingQuerySchema>>;
 
 /**
  * L0 lineage items are immutable, owner-bound, append-only by the engine.

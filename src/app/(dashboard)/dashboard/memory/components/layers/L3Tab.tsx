@@ -165,7 +165,7 @@ export default function L3Tab({ apiKeyId }: Props) {
                       onClick={() => setClearId(p.id)}
                       data-testid={`l3-clear-${p.id}`}
                     >
-                      {tCommon("clear")}
+                      {t("l3.clear")}
                     </AppleButton>
                   </div>
                 </div>
@@ -238,7 +238,7 @@ export default function L3Tab({ apiKeyId }: Props) {
               onClick={() => clearId && handleClear(clearId)}
               data-testid="l3-confirm-clear"
             >
-              {tCommon("clear")}
+              {t("l3.clear")}
             </AppleButton>
           </>
         }

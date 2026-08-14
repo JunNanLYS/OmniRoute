@@ -158,6 +158,40 @@ test("L1 completion writes canonical typed memories with source lineage", async 
   assert.equal(memories[0]?.metadata.sessionId, "session-a");
 });
 
+test("L1 completion rejects a missing scene name without writing canonical memory", async () => {
+  const scope = "owner-l1-missing-scene";
+  const result = l1Result("The project uses TypeScript", ["l0-1"]);
+  delete (result.scenes[0] as { sceneName?: string }).sceneName;
+
+  await assert.rejects(
+    complete({
+      kind: "L1_extract",
+      scope,
+      payload: { sourceMessageIds: ["l0-1"], conversation: "project details" },
+      result,
+    }),
+    /sceneName/
+  );
+  assert.equal(l1.listMemories({ owner: ownerFromApiKeyId(scope) }).length, 0);
+});
+
+test("L1 completion rejects malformed source message ids without writing canonical memory", async () => {
+  const scope = "owner-l1-malformed-lineage";
+  const result = l1Result("The project uses TypeScript", ["l0-1"]);
+  (result.scenes[0]!.memories[0] as { sourceMessageIds: unknown }).sourceMessageIds = "l0-1";
+
+  await assert.rejects(
+    complete({
+      kind: "L1_extract",
+      scope,
+      payload: { sourceMessageIds: ["l0-1"], conversation: "project details" },
+      result,
+    }),
+    /sourceMessageIds/
+  );
+  assert.equal(l1.listMemories({ owner: ownerFromApiKeyId(scope) }).length, 0);
+});
+
 test("L1 exact duplicates merge lineage instead of creating another memory", async () => {
   const scope = "owner-l1-dedupe";
   await complete({

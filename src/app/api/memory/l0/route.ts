@@ -18,7 +18,7 @@ import { validatedJsonBody } from "@/shared/validation/helpers";
 import {
   L0DeleteAllSchema,
   L0ImportSchema,
-  memoryListingQuerySchema,
+  L0ListingQuerySchema,
 } from "@/shared/schemas/memoryFourLayer";
 import { createErrorResponse } from "@/lib/api/errorResponse";
 
@@ -38,15 +38,12 @@ export async function GET(request: Request) {
   if ("errorResponse" in owner) return owner.errorResponse;
 
   const url = new URL(request.url);
-  const parsed = memoryListingQuerySchema.safeParse({
+  const parsed = L0ListingQuerySchema.safeParse({
     page: url.searchParams.get("page") ?? undefined,
     limit: url.searchParams.get("limit") ?? undefined,
     offset: url.searchParams.get("offset") ?? undefined,
     apiKeyId: owner.ownerApiKeyId ?? undefined,
     sessionId: url.searchParams.get("sessionId") ?? undefined,
-    sceneName: url.searchParams.get("sceneName") ?? undefined,
-    sourceId: url.searchParams.get("sourceId") ?? undefined,
-    type: url.searchParams.get("type") ?? undefined,
     q: url.searchParams.get("q") ?? undefined,
     includeDeleted: url.searchParams.get("includeDeleted") ?? undefined,
   });

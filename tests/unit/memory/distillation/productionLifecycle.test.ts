@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 
 type CleanupDeps = {
+  stopMemoryRetentionCleaner(): Promise<void>;
   stopDistillationWorker(): Promise<void>;
   flushSpendBatchWriter(): Promise<{ flushedEntries: number }>;
   closeAuditDb(): boolean;
@@ -27,6 +28,9 @@ describe("memory distillation production lifecycle wiring", () => {
 
     const events: string[] = [];
     await shutdown.runStorageCleanup!({
+      async stopMemoryRetentionCleaner() {
+        events.push("stop-retention-cleaner");
+      },
       async stopDistillationWorker() {
         events.push("stop-worker");
       },
@@ -53,6 +57,7 @@ describe("memory distillation production lifecycle wiring", () => {
     });
 
     assert.deepEqual(events, [
+      "stop-retention-cleaner",
       "stop-worker",
       "flush-spend",
       "close-audit",
@@ -70,6 +75,9 @@ describe("memory distillation production lifecycle wiring", () => {
     const warnings: string[] = [];
     await assert.doesNotReject(() =>
       shutdown.runStorageCleanup!({
+        async stopMemoryRetentionCleaner() {
+          events.push("stop-retention-cleaner");
+        },
         async stopDistillationWorker() {
           events.push("stop-worker");
           throw new Error("simulated stop failure");
@@ -103,6 +111,7 @@ describe("memory distillation production lifecycle wiring", () => {
     );
 
     assert.deepEqual(events, [
+      "stop-retention-cleaner",
       "stop-worker",
       "flush-spend",
       "close-audit",
@@ -128,6 +137,17 @@ describe("memory distillation production lifecycle wiring", () => {
     assert.ok(hydrate >= 0, "runtime settings hydration call must remain present");
     assert.ok(start > hydrate, "distillation must start after settings hydration");
     assert.ok(ready > start, "server readiness must be marked after distillation startup attempt");
+  });
+
+  it("starts retention after runtime settings hydration and before readiness", () => {
+    const source = fs.readFileSync(path.join(ROOT, "src/instrumentation-node.ts"), "utf8");
+    const hydrate = source.indexOf("applyRuntimeSettings(settings");
+    const start = source.indexOf("startMemoryRetentionCleaner");
+    const ready = source.lastIndexOf("markServerReady()");
+
+    assert.ok(hydrate >= 0, "runtime settings hydration call must remain present");
+    assert.ok(start > hydrate, "retention must start after settings hydration");
+    assert.ok(ready > start, "server readiness must be marked after retention startup attempt");
   });
 
   it("ships the standalone memory runtime in the npm package allowlist", () => {

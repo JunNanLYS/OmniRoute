@@ -17,12 +17,20 @@
  */
 
 import { createRequire } from "node:module";
+import type { SqliteAdapter } from "../lib/db/adapters/types.ts";
 import type { MemoryVectorStore } from "./types.ts";
 import { getMemoryDbInstance } from "./db/core.ts";
 
 const _require = createRequire(import.meta.url);
 
 let _instance: MemoryVectorStore | null | undefined = undefined;
+
+export function vectorRowIdBindValue(
+  driver: SqliteAdapter["driver"],
+  rowid: number
+): number | bigint {
+  return driver === "better-sqlite3" ? BigInt(rowid) : rowid;
+}
 
 export function getMemoryVectorStore(): MemoryVectorStore | null {
   if (_instance !== undefined) return _instance;
@@ -81,17 +89,19 @@ class BestEffortMemoryVectorStore implements MemoryVectorStore {
 
   upsertVector(args: { rowid: number; vector: Float32Array }): void {
     const db = getMemoryDbInstance();
-    // vec0 v0.1.9 requires BigInt for explicit rowid — plain numbers rejected.
-    db.prepare("DELETE FROM memory_vec WHERE rowid = ?").run(BigInt(args.rowid));
+    const rowid = vectorRowIdBindValue(db.driver, args.rowid);
+    db.prepare("DELETE FROM memory_vec WHERE rowid = ?").run(rowid);
     db.prepare("INSERT INTO memory_vec(rowid, embedding) VALUES (?, ?)").run(
-      BigInt(args.rowid),
+      rowid,
       Buffer.from(args.vector.buffer, args.vector.byteOffset, args.vector.byteLength)
     );
   }
 
   deleteVector(args: { rowid: number }): void {
     const db = getMemoryDbInstance();
-    db.prepare("DELETE FROM memory_vec WHERE rowid = ?").run(BigInt(args.rowid));
+    db.prepare("DELETE FROM memory_vec WHERE rowid = ?").run(
+      vectorRowIdBindValue(db.driver, args.rowid)
+    );
   }
 
   searchVector(args: {

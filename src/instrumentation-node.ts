@@ -442,6 +442,15 @@ export async function registerNodejs(): Promise<void> {
   }
 
   try {
+    const { startMemoryRetentionCleaner } = await import("@/memory/integration/retentionCleaner");
+    const started = await startMemoryRetentionCleaner();
+    if (started) console.log("[STARTUP] Memory retention cleaner started");
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[STARTUP] Memory retention cleaner failed to start (non-fatal):", msg);
+  }
+
+  try {
     const { startProductionDistillationWorker } =
       await import("@/memory/integration/distillationRuntime");
     const started = await startProductionDistillationWorker();

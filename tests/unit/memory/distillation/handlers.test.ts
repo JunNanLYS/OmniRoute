@@ -1,5 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
 import { DEFAULT_HANDLERS, clampPrompt } from "../../../../src/memory/distillation/handlers.ts";
 import type { DistillationTask } from "../../../../src/memory/distillation/store.ts";
 
@@ -20,6 +22,18 @@ function makeTask(over: Partial<DistillationTask>): DistillationTask {
     ...over,
   };
 }
+
+describe("distillation/handlers — build compatibility", () => {
+  it("uses statically analyzable prompt definitions", () => {
+    const source = readFileSync(
+      new URL("../../../../src/memory/distillation/handlers.ts", import.meta.url),
+      "utf8"
+    );
+
+    assert.doesNotMatch(source, /import\s*\(\s*`[^`]*\$\{/);
+    assert.doesNotMatch(source, /\.\/prompts\/tencent/);
+  });
+});
 
 describe("distillation/handlers — clampPrompt", () => {
   it("returns the original under the cap", () => {

@@ -9,7 +9,7 @@
 import { NextResponse } from "next/server";
 
 import { validatedJsonBody } from "@/shared/validation/helpers";
-import { L2CreateSchema, memoryListingQuerySchema } from "@/shared/schemas/memoryFourLayer";
+import { L2CreateSchema, L2ListingQuerySchema } from "@/shared/schemas/memoryFourLayer";
 import { createErrorResponse } from "@/lib/api/errorResponse";
 
 import {
@@ -28,15 +28,12 @@ export async function GET(request: Request) {
   if ("errorResponse" in owner) return owner.errorResponse;
 
   const url = new URL(request.url);
-  const parsed = memoryListingQuerySchema.safeParse({
+  const parsed = L2ListingQuerySchema.safeParse({
     page: url.searchParams.get("page") ?? undefined,
     limit: url.searchParams.get("limit") ?? undefined,
     offset: url.searchParams.get("offset") ?? undefined,
     apiKeyId: owner.ownerApiKeyId ?? undefined,
-    sessionId: url.searchParams.get("sessionId") ?? undefined,
     sceneName: url.searchParams.get("sceneName") ?? undefined,
-    sourceId: url.searchParams.get("sourceId") ?? undefined,
-    type: url.searchParams.get("type") ?? undefined,
     q: url.searchParams.get("q") ?? undefined,
     includeDeleted: url.searchParams.get("includeDeleted") ?? undefined,
   });

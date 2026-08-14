@@ -72,6 +72,16 @@ function stringArray(value: unknown): string[] {
   );
 }
 
+function requiredStringArray(value: unknown, field: string): string[] {
+  if (
+    !Array.isArray(value) ||
+    value.some((item) => typeof item !== "string" || item.length === 0)
+  ) {
+    throw new DistillationApplyError(`${field} must be an array of non-empty strings`);
+  }
+  return unique(value as string[]);
+}
+
 function unique(values: readonly string[]): string[] {
   return Array.from(new Set(values));
 }
@@ -103,6 +113,12 @@ function parseL1Result(payload: unknown): L1ApplyScene[] {
   for (const value of root.scenes.slice(0, 16)) {
     const scene = asRecord(value);
     if (!scene || !Array.isArray(scene.memories)) continue;
+    const sceneName = nonEmptyString(scene.sceneName ?? scene.scene_name);
+    if (!sceneName) {
+      throw new DistillationApplyError("L1 sceneName must be a non-empty string");
+    }
+    const messageIdsValue = scene.messageIds ?? scene.message_ids;
+    const messageIds = requiredStringArray(messageIdsValue, "L1 scene messageIds");
     const memories: L1ApplyMemory[] = [];
     for (const memoryValue of scene.memories) {
       if (memoryCount >= 32) break;
@@ -110,19 +126,20 @@ function parseL1Result(payload: unknown): L1ApplyScene[] {
       const content = nonEmptyString(memory?.content);
       const type = nonEmptyString(memory?.type);
       if (!memory || !content || !type || !VALID_L1_TYPES.has(type)) continue;
+      const sourceMessageIdsValue = memory.sourceMessageIds ?? memory.source_message_ids;
       memories.push({
         content: content.slice(0, 16_000),
         type: type as L1Type,
         priority: Math.round(bounded(memory.priority, 50, 0, 100)),
-        sourceMessageIds: stringArray(memory.sourceMessageIds ?? memory.source_message_ids),
+        sourceMessageIds: requiredStringArray(sourceMessageIdsValue, "L1 memory sourceMessageIds"),
         metadata: asRecord(memory.metadata) ?? {},
       });
       memoryCount++;
     }
     if (memories.length === 0) continue;
     scenes.push({
-      sceneName: nonEmptyString(scene.sceneName ?? scene.scene_name)?.slice(0, 240) ?? "未知情境",
-      messageIds: stringArray(scene.messageIds ?? scene.message_ids),
+      sceneName: sceneName.slice(0, 240),
+      messageIds,
       memories,
     });
   }

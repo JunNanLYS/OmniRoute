@@ -93,6 +93,7 @@ async function waitForDrain(): Promise<void> {
 }
 
 interface StorageCleanupDeps {
+  stopMemoryRetentionCleaner(): Promise<void>;
   stopDistillationWorker(): Promise<void>;
   flushSpendBatchWriter(): Promise<{ flushedEntries: number }>;
   closeAuditDb(): boolean;
@@ -103,6 +104,13 @@ interface StorageCleanupDeps {
 }
 
 export async function runStorageCleanup(deps: StorageCleanupDeps): Promise<void> {
+  try {
+    await deps.stopMemoryRetentionCleaner();
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    deps.logger.warn("[Shutdown] Could not stop memory retention cleaner:", message);
+  }
+
   try {
     await deps.stopDistillationWorker();
   } catch (error: unknown) {
@@ -141,6 +149,7 @@ async function cleanup(): Promise<void> {
       { closeLogRotation },
       { closeMemoryDbInstance },
       { stopDistillationWorker },
+      { stopMemoryRetentionCleaner },
     ] = await Promise.all([
       import("@omniroute/open-sse/mcp-server/audit.ts"),
       import("@/lib/db/core"),
@@ -148,8 +157,10 @@ async function cleanup(): Promise<void> {
       import("@/lib/logRotation"),
       import("@/memory/db/core"),
       import("@/memory/distillation/public"),
+      import("@/memory/integration/retentionCleaner"),
     ]);
     await runStorageCleanup({
+      stopMemoryRetentionCleaner,
       stopDistillationWorker,
       flushSpendBatchWriter,
       closeAuditDb,

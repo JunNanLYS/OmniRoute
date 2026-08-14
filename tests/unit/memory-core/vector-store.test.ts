@@ -90,3 +90,10 @@ test("FTS5 still works when vector store is disabled (degradation contract)", ()
   });
   assert.equal(hits.length, 1, "FTS5 must always work even when vectors are disabled");
 });
+
+test("explicit vec0 rowids use the scalar type supported by each SQLite driver", () => {
+  assert.equal(vec.vectorRowIdBindValue("better-sqlite3", 42), 42n);
+  assert.equal(vec.vectorRowIdBindValue("bun:sqlite", 42), 42);
+  assert.equal(vec.vectorRowIdBindValue("node:sqlite", 42), 42);
+  assert.equal(vec.vectorRowIdBindValue("sql.js", 42), 42);
+});

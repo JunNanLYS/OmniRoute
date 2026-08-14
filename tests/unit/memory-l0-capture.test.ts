@@ -224,14 +224,27 @@ describe("shouldCaptureComboResult — explicit combo-final helper", () => {
     );
   });
 
-  it("returns false for combo subrequests (no final-target flag yet)", () => {
+  it("returns false for combo subrequests without an explicit final-result marker", () => {
     assert.equal(
       shouldCaptureComboResult({
         isCombo: true,
         comboExecutionKey: "ck",
         comboStepId: "cs",
+        isFinalComboResult: false,
       }),
       false
+    );
+  });
+
+  it("returns true only for an explicitly final combo result", () => {
+    assert.equal(
+      shouldCaptureComboResult({
+        isCombo: true,
+        comboExecutionKey: "ck",
+        comboStepId: null,
+        isFinalComboResult: true,
+      }),
+      true
     );
   });
 });
@@ -340,20 +353,21 @@ describe("L0 — buildL0CaptureRecords", () => {
     assert.equal(records[0].metadata.model, "gpt-4o");
   });
 
-  it("assistant content has outer code fence stripped (local fallback)", () => {
+  it("preserves fenced assistant content byte-for-byte in the raw layer", () => {
+    const assistantContent = '```json\n{"k":"v"}\n```';
     const records = buildL0CaptureRecords({
       ownerId: "k",
       sessionId: "s",
       correlationId: null,
       comboExecutionKey: null,
       requestBody: { messages: [{ role: "user", content: "u" }] },
-      responseBody: { choices: [{ message: { content: '```json\n{"k":"v"}\n```' } }] },
+      responseBody: { choices: [{ message: { content: assistantContent } }] },
       source: "chat",
       provider: null,
       model: null,
     });
     assert.equal(records.length, 2);
-    assert.equal(records[1].content, '{"k":"v"}');
+    assert.equal(records[1].content, assistantContent);
   });
 
   it("nonstream path uses the response snapshot (no client/tool content)", () => {
@@ -488,6 +502,27 @@ describe("L0 — scheduleL0Capture (fail-open async)", () => {
     // After a setImmediate tick, the record should be present.
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(store.records.length, 1);
+  });
+
+  it("preserves fenced assistant content during asynchronous persistence", async () => {
+    const assistantContent = "```ts\nconst answer = 42;\n```";
+    const store = createInMemoryL0Store();
+    const records = buildL0CaptureRecords({
+      ownerId: "k",
+      sessionId: "s",
+      correlationId: "c",
+      comboExecutionKey: null,
+      requestBody: { messages: [{ role: "user", content: "show code" }] },
+      responseBody: { choices: [{ message: { content: assistantContent } }] },
+      source: "chat",
+      provider: "openai",
+      model: "gpt-4o",
+    });
+
+    scheduleL0Capture(records, { store, enqueueL1: noopL1Enqueuer });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(store.records[1]?.content, assistantContent);
   });
 
   it("uses insertMany when the store provides it", async () => {

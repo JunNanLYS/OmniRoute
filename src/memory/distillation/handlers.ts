@@ -13,10 +13,10 @@
  * do NOT call the executor directly. They take a `callModel` adapter and
  *     the resolved selection, and return a `DistillationHandlerResult`.
  *
- * Tencent prompt integration is a dynamic-import inside each handler so
- * the prompt content is fetched lazily (zero cost when the prompt is not
- * used) and a missing/failing import is a structured error the worker can
- * classify, NOT a crash.
+ * Handler prompts are defined statically in this module because their JSON
+ * output contracts are specific to these handlers. The richer Tencent prompt
+ * builders under `src/memory/tencent/` serve different pipeline stages and
+ * output shapes, so they must not be loaded here by a dynamic path.
  */
 
 import type { DistillationTask } from "./store.ts";
@@ -251,45 +251,30 @@ function regexFallback(raw: string): Array<{ kind: string; match: string }> {
   return out;
 }
 
-async function loadTencentPrompt(kind: string): Promise<string> {
-  try {
-    const mod = (await import(`./prompts/tencent/${kind}.ts` as string).catch(() => null)) as {
-      TENCENT_PROMPT?: string;
-    } | null;
-    if (mod?.TENCENT_PROMPT) return mod.TENCENT_PROMPT;
-  } catch {
-    /* fallthrough */
-  }
-  // Fallback prompt — embedded so the worker is never blocked on the prompt
-  // module. Tencent integration can ship its real prompt in a follow-up commit
-  // without changing this file.
-  switch (kind) {
-    case "L1_extract":
-      return [
-        "Extract durable memories from the conversation.",
-        "Output a strict JSON array of scenes. Each scene has scene_name, message_ids, and memories.",
-        "Each memory has content, type, priority, source_message_ids, and metadata.",
-        `Allowed types: ${L1_TYPES.join("|")}. No prose.`,
-      ].join("\n");
-    case "L2_scene":
-      return [
-        "Update one durable scene from the supplied memories and existing scene context.",
-        "Output JSON: { summary, tags: [string], content, heat, persona_update_requested }.",
-        "heat must be a number from 0 to 1. No prose.",
-      ].join("\n");
-    case "L3_persona":
-      return [
-        "Synthesize the supplied scenes into durable persona or operating-doctrine content.",
-        "Output JSON: { content, prompt_mode }. No prose.",
-      ].join("\n");
-    case "L0_chunk_embed":
-      return [
-        "You summarise a chunk in <120 chars for vector recall.",
-        "Output JSON: { summary }.",
-      ].join("\n");
-    default:
-      return "Output strict JSON.";
-  }
+const DISTILLATION_SYSTEM_PROMPTS: Record<DistillationTask["kind"], string> = {
+  L1_extract: [
+    "Extract durable memories from the conversation.",
+    "Output a strict JSON array of scenes. Each scene has scene_name, message_ids, and memories.",
+    "Each memory has content, type, priority, source_message_ids, and metadata.",
+    `Allowed types: ${L1_TYPES.join("|")}. No prose.`,
+  ].join("\n"),
+  L2_scene: [
+    "Update one durable scene from the supplied memories and existing scene context.",
+    "Output JSON: { summary, tags: [string], content, heat, persona_update_requested }.",
+    "heat must be a number from 0 to 1. No prose.",
+  ].join("\n"),
+  L3_persona: [
+    "Synthesize the supplied scenes into durable persona or operating-doctrine content.",
+    "Output JSON: { content, prompt_mode }. No prose.",
+  ].join("\n"),
+  L0_chunk_embed: [
+    "You summarise a chunk in <120 chars for vector recall.",
+    "Output JSON: { summary }.",
+  ].join("\n"),
+};
+
+function getDistillationSystemPrompt(kind: DistillationTask["kind"]): string {
+  return DISTILLATION_SYSTEM_PROMPTS[kind];
 }
 
 /**
@@ -306,7 +291,7 @@ export const L1ExtractHandler: DistillationHandler = defineHandler(
     if (!budget.ok)
       return { ok: false, error: { kind: "budget_exceeded", message: "Input exceeds budget" } };
 
-    const systemPrompt = await loadTencentPrompt("L1_extract");
+    const systemPrompt = getDistillationSystemPrompt("L1_extract");
     const response = await args.callModel({
       messages: [
         { role: "system", content: systemPrompt },
@@ -354,7 +339,7 @@ export const L2SceneHandler: DistillationHandler = defineHandler(
     if (!budget.ok)
       return { ok: false, error: { kind: "budget_exceeded", message: "Input exceeds budget" } };
 
-    const systemPrompt = await loadTencentPrompt("L2_scene");
+    const systemPrompt = getDistillationSystemPrompt("L2_scene");
     const response = await args.callModel({
       messages: [
         { role: "system", content: systemPrompt },
@@ -426,7 +411,7 @@ export const L3PersonaHandler: DistillationHandler = defineHandler(
     if (samples.length === 0) {
       return { ok: false, error: { kind: "model_unset", message: "No persona samples" } };
     }
-    const systemPrompt = await loadTencentPrompt("L3_persona");
+    const systemPrompt = getDistillationSystemPrompt("L3_persona");
     const response = await args.callModel({
       messages: [
         { role: "system", content: systemPrompt },
@@ -488,7 +473,7 @@ export const L0ChunkEmbedHandler: DistillationHandler = defineHandler(
     if (!chunk) {
       return { ok: false, error: { kind: "model_unset", message: "No chunk" } };
     }
-    const systemPrompt = await loadTencentPrompt("L0_chunk_embed");
+    const systemPrompt = getDistillationSystemPrompt("L0_chunk_embed");
     const response = await args.callModel({
       messages: [
         { role: "system", content: systemPrompt },

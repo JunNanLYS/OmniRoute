@@ -100,6 +100,73 @@ test("production recall provider reads L1, L2, and L3 from standalone memory sto
   assert.equal(out.layers.l3[0]?.content, "Prefer concise technical answers");
 });
 
+test("production L0 capture helper applies the gate and schedules both visible turns", async () => {
+  wipeDb();
+
+  runtime.scheduleProductionL0Capture({
+    ownerId: OWNER_ID,
+    captureEnabled: true,
+    isCombo: false,
+    comboStepId: null,
+    sessionId: "session-capture-helper",
+    correlationId: "corr-helper",
+    comboExecutionKey: null,
+    requestBody: { messages: [{ role: "user", content: "Remember this" }] },
+    responseBody: { choices: [{ message: { content: "Stored response" } }] },
+    source: "chat",
+    provider: "openai",
+    model: "gpt-4o-mini",
+    log: null,
+  });
+
+  let rows = l0.listMessages({
+    owner: runtime.ownerFromApiKeyId(OWNER_ID),
+    sessionId: "session-capture-helper",
+  });
+  for (let attempt = 0; attempt < 20 && rows.length < 2; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    rows = l0.listMessages({
+      owner: runtime.ownerFromApiKeyId(OWNER_ID),
+      sessionId: "session-capture-helper",
+    });
+  }
+
+  assert.deepEqual(
+    rows.map((row) => [row.role, row.content]),
+    [
+      ["user", "Remember this"],
+      ["assistant", "Stored response"],
+    ]
+  );
+});
+
+test("production L0 capture helper does not persist when capture is disabled", async () => {
+  wipeDb();
+
+  runtime.scheduleProductionL0Capture({
+    ownerId: OWNER_ID,
+    captureEnabled: false,
+    isCombo: false,
+    comboStepId: null,
+    sessionId: "session-capture-disabled",
+    correlationId: "corr-disabled",
+    comboExecutionKey: null,
+    requestBody: { messages: [{ role: "user", content: "Do not store this" }] },
+    responseBody: { choices: [{ message: { content: "Do not store this either" } }] },
+    source: "chat",
+    provider: "openai",
+    model: "gpt-4o-mini",
+    log: null,
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  const rows = l0.listMessages({
+    owner: runtime.ownerFromApiKeyId(OWNER_ID),
+    sessionId: "session-capture-disabled",
+  });
+  assert.deepEqual(rows, []);
+});
+
 test("production L0 capture store persists records in standalone memory storage", async () => {
   wipeDb();
   const store = runtime.getProductionL0MessageStore();

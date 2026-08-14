@@ -7,7 +7,7 @@
 import { NextResponse } from "next/server";
 
 import { validatedJsonBody } from "@/shared/validation/helpers";
-import { L3RegenerateSchema, memoryListingQuerySchema } from "@/shared/schemas/memoryFourLayer";
+import { L3RegenerateSchema, L3ListingQuerySchema } from "@/shared/schemas/memoryFourLayer";
 import { createErrorResponse } from "@/lib/api/errorResponse";
 
 import {
@@ -26,16 +26,11 @@ export async function GET(request: Request) {
   if ("errorResponse" in owner) return owner.errorResponse;
 
   const url = new URL(request.url);
-  const parsed = memoryListingQuerySchema.safeParse({
+  const parsed = L3ListingQuerySchema.safeParse({
     page: url.searchParams.get("page") ?? undefined,
     limit: url.searchParams.get("limit") ?? undefined,
     offset: url.searchParams.get("offset") ?? undefined,
     apiKeyId: owner.ownerApiKeyId ?? undefined,
-    sessionId: url.searchParams.get("sessionId") ?? undefined,
-    sceneName: url.searchParams.get("sceneName") ?? undefined,
-    sourceId: url.searchParams.get("sourceId") ?? undefined,
-    type: url.searchParams.get("type") ?? undefined,
-    q: url.searchParams.get("q") ?? undefined,
     includeDeleted: url.searchParams.get("includeDeleted") ?? undefined,
   });
 
@@ -71,7 +66,7 @@ export async function POST(request: Request) {
   const owner = await resolveOwner(request);
   if ("errorResponse" in owner) return owner.errorResponse;
 
-  const body = await validatedJsonBody(request, L3RegenerateSchema);
+  const body = await validatedJsonBody(request, L3RegenerateSchema, { emptyBody: {} });
   if (!body.success) return body.response;
 
   try {
