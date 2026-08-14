@@ -441,6 +441,16 @@ export async function registerNodejs(): Promise<void> {
     console.warn("[STARTUP] Could not restore runtime settings:", msg);
   }
 
+  try {
+    const { startProductionDistillationWorker } =
+      await import("@/memory/integration/distillationRuntime");
+    const started = await startProductionDistillationWorker();
+    if (started) console.log("[STARTUP] Memory distillation worker started");
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[STARTUP] Memory distillation worker failed to start (non-fatal):", msg);
+  }
+
   // Proactively start the credential-health sweep at boot so stale web-session
   // connections (cookies that expired overnight) get re-probed and recovered on
   // startup — instead of staying red until the first real request lazily imports
@@ -568,16 +578,6 @@ export async function registerNodejs(): Promise<void> {
         .catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] context-window reconcile failed to start (non-fatal):", msg);
-        }),
-
-      // TV6 typed memory decay: optional periodic sweep of decayed episodic memories.
-      // Doubly opt-in (no-op unless MEMORY_TYPED_DECAY_ENABLED=true AND
-      // MEMORY_TYPED_DECAY_SWEEP_INTERVAL>0). Never deletes by default. Never fatal.
-      import("@/lib/memory/typedDecay")
-        .then((m) => m.startMemoryDecaySweep())
-        .catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.warn("[STARTUP] memory decay sweep failed to start (non-fatal):", msg);
         }),
 
       // Backup schedule (#8513): execute `backup-schedule.json` cron server-side.

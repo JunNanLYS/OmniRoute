@@ -8,7 +8,7 @@ import ResponsesStatePolicyTab from "../components/ResponsesStatePolicyTab";
 import CodexFastTierTab from "../components/CodexFastTierTab";
 import CodexAutoPingTab from "../components/CodexAutoPingTab";
 import ClaudeFastModeTab from "../components/ClaudeFastModeTab";
-import MemorySkillsTab from "../components/MemorySkillsTab";
+import SkillsTab from "../components/SkillsTab";
 import ModelsDevSyncTab from "../components/ModelsDevSyncTab";
 import UsageTokenBufferTab from "../components/UsageTokenBufferTab";
 import ModelCapabilityOverridesTab from "../components/ModelCapabilityOverridesTab";
@@ -26,7 +26,7 @@ export default function SettingsAiPage() {
       <CodexFastTierTab />
       <CodexAutoPingTab />
       <ClaudeFastModeTab />
-      <MemorySkillsTab />
+      <SkillsTab />
       <ModelCapabilityOverridesTab />
       <ModelsDevSyncTab />
     </div>

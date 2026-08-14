@@ -1,35 +1,58 @@
 /**
- * Tests for #3890: prompt-cache misses when memory injection is enabled.
+ * Regression coverage for #3890 against the four-layer injection transformer.
  *
- * When the client uses prompt caching (cache_control breakpoints), the previous behavior
- * prepended the (per-query, varying) memory message at index 0 — shifting the entire
- * cacheable prefix and forcing a cache miss on every turn. With `cacheSafe`, memory is
- * inserted just before the last user message so the cacheable prefix stays byte-stable.
+ * Stable L3/L2 context belongs in the leading system prefix. Per-query L1 recall
+ * belongs immediately before the final user turn whenever prompt caching is active,
+ * so changing recalled memories cannot displace the cacheable conversation prefix.
  */
 
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { injectMemory } from "../../src/lib/memory/injection.ts";
-import type { ChatRequest } from "../../src/lib/memory/injection.ts";
-import type { Memory } from "../../src/lib/memory/types.ts";
+import { describe, it } from "node:test";
 
-function mem(content: string): Memory {
+import {
+  renderLayeredInjection,
+  type InjectionBudgets,
+  type LayerInjectionInput,
+} from "../../src/memory/integration/injectionTransformer.ts";
+
+interface ChatMessage extends Record<string, unknown> {
+  role: string;
+  content: string;
+  cache_control?: { type: string };
+}
+
+interface ChatBody extends Record<string, unknown> {
+  model: string;
+  messages: ChatMessage[];
+}
+
+const BUDGETS: InjectionBudgets = {
+  l3CharBudget: 600,
+  l2CharBudget: 600,
+  l1CharBudget: 600,
+  totalCharBudget: 8_000,
+};
+
+function layers(memory: string, includeStableContext = false): LayerInjectionInput {
   return {
-    id: `mem-${content}`,
-    content,
-    type: "factual" as any,
-    apiKeyId: "k",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-    importance: 0.5,
+    l3: includeStableContext
+      ? [{ id: "l3-1", title: "Preferences", content: "Keep answers concise" }]
+      : [],
+    l2: [],
+    l1: [{ id: `l1-${memory}`, content: memory, score: 0.9, tags: [] }],
+    toolsGuide: includeStableContext ? "MEMORY TOOLS GUIDE" : "",
   };
 }
 
-function multiTurn(): ChatRequest {
+function multiTurn(): ChatBody {
   return {
     model: "anthropic/claude-sonnet-4-6",
     messages: [
-      { role: "system", content: "SYSTEM PROMPT", cache_control: { type: "ephemeral" } } as any,
+      {
+        role: "system",
+        content: "SYSTEM PROMPT",
+        cache_control: { type: "ephemeral" },
+      },
       { role: "user", content: "turn 1 question" },
       { role: "assistant", content: "turn 1 answer" },
       { role: "user", content: "turn 2 question" },
@@ -37,69 +60,92 @@ function multiTurn(): ChatRequest {
   };
 }
 
-describe("injectMemory cache-safe positioning (#3890)", () => {
-  it("default (cacheSafe off) prepends memory at index 0 — unchanged legacy behavior", () => {
-    const out = injectMemory(multiTurn(), [mem("dark mode")], "anthropic");
-    assert.equal(out.messages[0].role, "system");
-    assert.ok(out.messages[0].content.includes("Memory context"));
-    assert.equal(out.messages[1].content, "SYSTEM PROMPT");
+function messagesFrom(body: Record<string, unknown>): ChatMessage[] {
+  assert.ok(Array.isArray(body.messages));
+  return body.messages as ChatMessage[];
+}
+
+describe("four-layer memory cache-safe positioning (#3890)", () => {
+  it("places dynamic L1 immediately before the final user without shifting the prefix", () => {
+    const request = multiTurn();
+    const prefixBefore = request.messages.slice(0, 3);
+
+    const result = renderLayeredInjection(request, layers("dark mode"), BUDGETS, {
+      provider: "anthropic",
+      hasCacheControl: true,
+    });
+    const messages = messagesFrom(result.body);
+
+    assert.deepEqual(messages.slice(0, 3), prefixBefore);
+    assert.equal(messages[3].role, "user");
+    assert.match(messages[3].content, /<relevant-memories>/);
+    assert.match(messages[3].content, /dark mode/);
+    assert.equal(messages[4].content, "turn 2 question");
+    assert.equal(messages.length, 5);
+    assert.equal(result.l1Placement, "pre-last-user");
   });
 
-  it("cacheSafe inserts memory just before the last user message, preserving the prefix", () => {
-    const req = multiTurn();
-    const prefixBefore = JSON.stringify(req.messages.slice(0, 3)); // sys, u1, a1
-    const out = injectMemory(req, [mem("dark mode")], "anthropic", { cacheSafe: true });
-
-    // The cacheable prefix (system + prior turns up to the last assistant) is byte-identical.
-    assert.equal(JSON.stringify(out.messages.slice(0, 3)), prefixBefore);
-    // Memory is injected right before the last user message...
-    assert.equal(out.messages[3].role, "system");
-    assert.ok(out.messages[3].content.includes("Memory context"));
-    // ...and the last user message is preserved at the tail.
-    assert.equal(out.messages[4].content, "turn 2 question");
-    assert.equal(out.messages.length, 5);
-    // Memory must NOT be at index 0 (that is what broke caching).
-    assert.notEqual(out.messages[0].content, out.messages[3].content);
-    assert.equal(out.messages[0].content, "SYSTEM PROMPT");
-  });
-
-  it("cacheSafe keeps the cacheable prefix identical across two turns despite different memories", () => {
-    // Turn 1: [sys, u1]; Turn 2: [sys, u1, a1, u2]. Different memories retrieved per query.
-    // Same conversation, observed on two consecutive turns.
-    const turn1: ChatRequest = {
+  it("keeps the cache breakpoint byte-stable across recalls with different L1 content", () => {
+    const turn1: ChatBody = {
       model: "anthropic/claude-sonnet-4-6",
       messages: [
-        { role: "system", content: "SYSTEM PROMPT", cache_control: { type: "ephemeral" } } as any,
+        {
+          role: "system",
+          content: "SYSTEM PROMPT",
+          cache_control: { type: "ephemeral" },
+        },
         { role: "user", content: "turn 1 question" },
       ],
     };
     const turn2 = multiTurn();
 
-    const out1 = injectMemory(turn1, [mem("A")], "anthropic", { cacheSafe: true });
-    const out2 = injectMemory(turn2, [mem("B")], "anthropic", { cacheSafe: true });
+    const out1 = messagesFrom(
+      renderLayeredInjection(turn1, layers("memory A"), BUDGETS, {
+        provider: "anthropic",
+        hasCacheControl: true,
+      }).body
+    );
+    const out2 = messagesFrom(
+      renderLayeredInjection(turn2, layers("memory B"), BUDGETS, {
+        provider: "anthropic",
+        hasCacheControl: true,
+      }).body
+    );
 
-    // The cache-breakpoint-bearing system message stays at the head, byte-identical, in
-    // both turns (and is NOT displaced by the per-query memory) — so the prompt cache
-    // created on turn 1 still matches on turn 2. (Memory is inserted before the last user
-    // turn: [SYS, MEM_A, u1] and [SYS, u1, a1, MEM_B, u2] respectively.)
-    assert.deepEqual(out1.messages[0], out2.messages[0]);
-    assert.equal(out1.messages[0].content, "SYSTEM PROMPT");
-    assert.equal((out1.messages[0] as any).cache_control?.type, "ephemeral");
-    // In turn 2 the earlier turns up to the last assistant are preserved before memory.
-    assert.equal(out2.messages[1].content, "turn 1 question");
-    assert.equal(out2.messages[2].content, "turn 1 answer");
-    assert.ok(out2.messages[3].content.includes("Memory context"));
-    assert.equal(out2.messages[4].content, "turn 2 question");
+    assert.equal(JSON.stringify(out1[0]), JSON.stringify(out2[0]));
+    assert.deepEqual(out1[0], turn1.messages[0]);
+    assert.deepEqual(out2.slice(0, 3), turn2.messages.slice(0, 3));
+    assert.match(out1[1].content, /memory A/);
+    assert.match(out2[3].content, /memory B/);
   });
 
-  it("cacheSafe falls back to leading injection when there is no user message", () => {
-    const req: ChatRequest = {
-      model: "anthropic/claude-sonnet-4-6",
-      messages: [{ role: "system", content: "SYS" }],
-    };
-    const out = injectMemory(req, [mem("x")], "anthropic", { cacheSafe: true });
-    assert.equal(out.messages[0].role, "system");
-    assert.ok(out.messages[0].content.includes("Memory context"));
-    assert.equal(out.messages[1].content, "SYS");
+  it("uses cache-safe placement for a caching provider without an explicit marker", () => {
+    const result = renderLayeredInjection(multiTurn(), layers("dark mode"), BUDGETS, {
+      provider: "anthropic",
+      hasCacheControl: false,
+      isCachingProvider: true,
+    });
+    const messages = messagesFrom(result.body);
+
+    assert.equal(result.l1Placement, "pre-last-user");
+    assert.match(messages[3].content, /<relevant-memories>/);
+    assert.equal(messages[4].content, "turn 2 question");
+  });
+
+  it("keeps stable L3 context in the leading cached system message", () => {
+    const result = renderLayeredInjection(multiTurn(), layers("per-query memory", true), BUDGETS, {
+      provider: "anthropic",
+      hasCacheControl: true,
+    });
+    const messages = messagesFrom(result.body);
+
+    assert.equal(result.systemPlacement, "leading-merged");
+    assert.equal(messages[0].role, "system");
+    assert.equal(messages[0].cache_control?.type, "ephemeral");
+    assert.ok(messages[0].content.startsWith("SYSTEM PROMPT"));
+    assert.match(messages[0].content, /\[L3 stable context\]/);
+    assert.match(messages[0].content, /MEMORY TOOLS GUIDE/);
+    assert.match(messages[3].content, /per-query memory/);
+    assert.equal(messages[4].content, "turn 2 question");
   });
 });

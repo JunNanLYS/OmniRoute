@@ -1,4 +1,4 @@
-import { systemMessageMustBeFirst } from "../../../src/lib/memory/injection.ts";
+import { systemMessageMustBeFirst } from "../../../src/shared/utils/providerSystemMessages.ts";
 
 type Message = { role: string; content: unknown; [key: string]: unknown };
 
@@ -7,7 +7,9 @@ function toTextContent(content: unknown): string {
   if (Array.isArray(content)) {
     return content
       .filter((part): part is { type: string; text?: unknown } => {
-        return Boolean(part) && typeof part === "object" && (part as { type?: unknown }).type === "text";
+        return (
+          Boolean(part) && typeof part === "object" && (part as { type?: unknown }).type === "text"
+        );
       })
       .map((part) => String(part.text ?? ""))
       .join("\n");
@@ -17,8 +19,8 @@ function toTextContent(content: unknown): string {
 
 /**
  * #7293: hoist every `system`-role message onto index 0 for providers that reject a
- * non-first system message (`systemMessageMustBeFirst()` — the single source of truth
- * already used by `src/lib/memory/injection.ts`'s memory-injection half, #6135/PR#6225).
+ * non-first system message (`systemMessageMustBeFirst()` is the shared provider-capability
+ * source of truth used by both translation and four-layer memory injection).
  *
  * `translateRequest()` is the single outbound choke point every request passes through,
  * including same-format (OpenAI→OpenAI) passthrough where none of the format-specific

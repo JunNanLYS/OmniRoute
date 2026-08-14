@@ -19,3 +19,10 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Third-party attributions: see THIRD_PARTY_NOTICES.md. Portions of this
+project (specifically `src/memory/tencent/**`) are adapted from
+TencentDB Agent Memory (MIT, Copyright (C) 2026 Tencent) — see that file
+for details and the verbatim upstream MIT terms.

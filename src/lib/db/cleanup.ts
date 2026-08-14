@@ -222,36 +222,6 @@ export async function cleanupA2aEvents(): Promise<CleanupResult> {
 }
 
 /**
- * Clean up old memory_entries based on retention settings.
- */
-export async function cleanupMemoryEntries(): Promise<CleanupResult> {
-  const db = getDbInstance();
-  const retention = getRetentionSettings();
-
-  const retentionDays = retention.memoryEntries;
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
-  const cutoffISO = cutoffDate.toISOString();
-
-  const result: CleanupResult = { deleted: 0, errors: 0 };
-
-  try {
-    const stmt = db.prepare("DELETE FROM memories WHERE created_at < ?");
-    const runResult = stmt.run(cutoffISO);
-    result.deleted = runResult.changes;
-
-    console.log(
-      `[Cleanup] Deleted ${result.deleted} memory_entries older than ${retentionDays} days`
-    );
-  } catch (err: unknown) {
-    console.error("[Cleanup] Error cleaning memory_entries:", err);
-    result.errors++;
-  }
-
-  return result;
-}
-
-/**
  * Clean up old domain_cost_history based on retention settings. (#6848)
  * Uses unix-epoch `timestamp` column (INTEGER).
  */
@@ -395,7 +365,6 @@ export async function runAutoCleanup(): Promise<{
     compressionAnalytics: await cleanupCompressionAnalytics(),
     mcpAudit: await cleanupMcpAudit(),
     a2aEvents: await cleanupA2aEvents(),
-    memoryEntries: await cleanupMemoryEntries(),
     domainCostHistory: await cleanupDomainCostHistory(),
     compressionCacheStats: await cleanupCompressionCacheStats(),
     xpAuditLog: await cleanupXpAuditLog(),
@@ -547,16 +516,56 @@ function isResetUsageHistoryPeriod(period: string): period is ResetUsageHistoryP
  */
 const RESET_TARGETS: Array<DeleteByPeriodTarget & { resultKey: keyof ResetUsageHistoryResult }> = [
   { table: "usage_history", column: "timestamp", cutoff: "iso", resultKey: "deletedUsageHistory" },
-  { table: "daily_usage_summary", column: "date", cutoff: "date", resultKey: "deletedDailySummary" },
-  { table: "hourly_usage_summary", column: "date_hour", cutoff: "dateHour", resultKey: "deletedHourlySummary" },
+  {
+    table: "daily_usage_summary",
+    column: "date",
+    cutoff: "date",
+    resultKey: "deletedDailySummary",
+  },
+  {
+    table: "hourly_usage_summary",
+    column: "date_hour",
+    cutoff: "dateHour",
+    resultKey: "deletedHourlySummary",
+  },
   { table: "call_logs", column: "timestamp", cutoff: "iso", resultKey: "deletedCallLogs" },
-  { table: "request_detail_logs", column: "timestamp", cutoff: "iso", resultKey: "deletedRequestDetailLogs" },
+  {
+    table: "request_detail_logs",
+    column: "timestamp",
+    cutoff: "iso",
+    resultKey: "deletedRequestDetailLogs",
+  },
   { table: "proxy_logs", column: "timestamp", cutoff: "iso", resultKey: "deletedProxyLogs" },
-  { table: "relay_logs", column: "created_at", cutoff: "epochSeconds", resultKey: "deletedRelayLogs" },
-  { table: "compression_analytics", column: "timestamp", cutoff: "iso", resultKey: "deletedCompressionAnalytics" },
-  { table: "compression_run_telemetry", column: "timestamp", cutoff: "epochMs", resultKey: "deletedCompressionRunTelemetry" },
-  { table: "routing_decisions", column: "created_at", cutoff: "iso", resultKey: "deletedRoutingDecisions" },
-  { table: "quota_consumption", column: "updated_at", cutoff: "epochMs", resultKey: "deletedQuotaConsumption" },
+  {
+    table: "relay_logs",
+    column: "created_at",
+    cutoff: "epochSeconds",
+    resultKey: "deletedRelayLogs",
+  },
+  {
+    table: "compression_analytics",
+    column: "timestamp",
+    cutoff: "iso",
+    resultKey: "deletedCompressionAnalytics",
+  },
+  {
+    table: "compression_run_telemetry",
+    column: "timestamp",
+    cutoff: "epochMs",
+    resultKey: "deletedCompressionRunTelemetry",
+  },
+  {
+    table: "routing_decisions",
+    column: "created_at",
+    cutoff: "iso",
+    resultKey: "deletedRoutingDecisions",
+  },
+  {
+    table: "quota_consumption",
+    column: "updated_at",
+    cutoff: "epochMs",
+    resultKey: "deletedQuotaConsumption",
+  },
   { table: "token_ledger", column: "created_at", cutoff: "iso", resultKey: "deletedTokenLedger" },
 ];
 

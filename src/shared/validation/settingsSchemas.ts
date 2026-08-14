@@ -308,6 +308,8 @@ export const updateSettingsSchema = z.object({
       })
     )
     .optional(),
+  // Skills are independent from the four-layer memory subsystem.
+  skillsEnabled: z.boolean().optional(),
   // SkillsMP marketplace API key
   skillsmpApiKey: z.string().max(200).optional(),
   // Active skills provider (single source of truth for skills page)

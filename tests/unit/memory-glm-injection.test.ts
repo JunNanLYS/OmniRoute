@@ -1,179 +1,113 @@
 /**
- * Tests for #1701: GLM providers rejecting system role from memory injection.
+ * Regression coverage for #1701 against the four-layer injection transformer.
  *
- * Validates that injectMemory() uses the user role fallback for GLM/ZAI/Qianfan
- * providers that do not support the system role, while still using system role
- * for standard providers like OpenAI.
+ * Providers that reject the system role receive one leading user reference containing
+ * stable layer context and dynamic L1 recall. Providers with system-role support keep
+ * stable context in a system message.
  */
 
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { injectMemory, providerSupportsSystemMessage } from "../../src/lib/memory/injection.ts";
-import type { ChatRequest } from "../../src/lib/memory/injection.ts";
-import type { Memory } from "../../src/lib/memory/types.ts";
-import { normalizeSystemRole } from "../../open-sse/services/roleNormalizer.ts";
+import { describe, it } from "node:test";
 
-// ── Fixtures ───────────────────────────────────────────────────────────────────
+import {
+  renderLayeredInjection,
+  type InjectionBudgets,
+  type LayerInjectionInput,
+} from "../../src/memory/integration/injectionTransformer.ts";
+import { providerSupportsSystemMessage } from "../../src/shared/utils/providerSystemMessages.ts";
 
-const baseRequest: ChatRequest = {
-  model: "glm-5.1",
-  messages: [{ role: "user", content: "Hello" }],
+interface ChatMessage extends Record<string, unknown> {
+  role: string;
+  content: string;
+}
+
+interface ChatBody extends Record<string, unknown> {
+  model: string;
+  messages: ChatMessage[];
+}
+
+const BUDGETS: InjectionBudgets = {
+  l3CharBudget: 600,
+  l2CharBudget: 600,
+  l1CharBudget: 600,
+  totalCharBudget: 8_000,
 };
 
-const testMemories: Memory[] = [
-  {
-    id: "mem-1",
-    content: "User prefers dark mode",
-    type: "factual" as any,
-    apiKeyId: "test-key",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    importance: 0.5,
-  },
-];
+const LAYERS: LayerInjectionInput = {
+  l3: [{ id: "l3-1", title: "Preferences", content: "User prefers dark mode" }],
+  l2: [{ id: "l2-1", title: "UI notes", summary: "Navigation for display preferences" }],
+  l1: [{ id: "l1-1", content: "Use dark mode", score: 0.9, tags: ["ui"] }],
+  toolsGuide: "MEMORY TOOLS GUIDE",
+};
 
-// ── providerSupportsSystemMessage ──────────────────────────────────────────────
+function requestFor(provider: string): ChatBody {
+  return {
+    model: `${provider}-model`,
+    messages: [{ role: "user", content: "Hello" }],
+  };
+}
 
-describe("providerSupportsSystemMessage — GLM providers (#1701)", () => {
-  it("should return false for glm", () => {
-    assert.equal(providerSupportsSystemMessage("glm"), false);
+function messagesFrom(body: Record<string, unknown>): ChatMessage[] {
+  assert.ok(Array.isArray(body.messages));
+  return body.messages as ChatMessage[];
+}
+
+describe("providerSupportsSystemMessage — GLM provider family (#1701)", () => {
+  it("marks GLM, Z.AI, Qianfan, and o1 providers as system-role incompatible", () => {
+    for (const provider of ["glm", "glmt", "glm-cn", "zai", "qianfan", "o1"]) {
+      assert.equal(providerSupportsSystemMessage(provider), false, provider);
+    }
+    assert.equal(providerSupportsSystemMessage(" GLM "), false);
   });
 
-  it("should return false for glmt", () => {
-    assert.equal(providerSupportsSystemMessage("glmt"), false);
-  });
-
-  it("should return false for glm-cn", () => {
-    assert.equal(providerSupportsSystemMessage("glm-cn"), false);
-  });
-
-  it("should return false for zai", () => {
-    assert.equal(providerSupportsSystemMessage("zai"), false);
-  });
-
-  it("should return false for qianfan", () => {
-    assert.equal(providerSupportsSystemMessage("qianfan"), false);
-  });
-
-  it("should return false for o1 (existing behavior)", () => {
-    assert.equal(providerSupportsSystemMessage("o1"), false);
-  });
-
-  it("should return true for openai (regression check)", () => {
+  it("keeps the safe default for standard and unspecified providers", () => {
     assert.equal(providerSupportsSystemMessage("openai"), true);
-  });
-
-  it("should return true for anthropic (regression check)", () => {
     assert.equal(providerSupportsSystemMessage("anthropic"), true);
-  });
-
-  it("should return true for null/undefined (safe default)", () => {
     assert.equal(providerSupportsSystemMessage(null), true);
     assert.equal(providerSupportsSystemMessage(undefined), true);
   });
 });
 
-// ── injectMemory with GLM providers ────────────────────────────────────────────
+describe("four-layer injection — GLM system-role fallback (#1701)", () => {
+  it("renders one leading user reference for each incompatible provider", () => {
+    for (const provider of ["glm", "glmt", "glm-cn", "zai", "qianfan"]) {
+      const request = requestFor(provider);
+      const before = JSON.stringify(request);
+      const result = renderLayeredInjection(request, LAYERS, BUDGETS, { provider });
+      const messages = messagesFrom(result.body);
 
-describe("injectMemory — GLM providers use user role (#1701)", () => {
-  it("should inject as user role for provider=glm", () => {
-    const result = injectMemory(baseRequest, testMemories, "glm");
-    assert.equal(result.messages[0].role, "user");
-    assert.ok(result.messages[0].content.includes("Memory context:"));
+      assert.equal(result.systemPlacement, "fallback-user-leading", provider);
+      assert.equal(result.l1Placement, "leading-user", provider);
+      assert.equal(messages.length, 2, provider);
+      assert.equal(messages[0].role, "user", provider);
+      assert.equal(
+        messages.some((message) => message.role === "system"),
+        false,
+        provider
+      );
+      assert.match(messages[0].content, /\[L3 stable context\]/, provider);
+      assert.match(messages[0].content, /\[L2 navigation index\]/, provider);
+      assert.match(messages[0].content, /MEMORY TOOLS GUIDE/, provider);
+      assert.match(messages[0].content, /<relevant-memories>/, provider);
+      assert.match(messages[0].content, /Use dark mode/, provider);
+      assert.equal(messages[1].content, "Hello", provider);
+      assert.equal(JSON.stringify(request), before, `${provider} input was mutated`);
+    }
   });
 
-  it("should inject as user role for provider=glmt", () => {
-    const result = injectMemory(baseRequest, testMemories, "glmt");
-    assert.equal(result.messages[0].role, "user");
-  });
+  it("uses a leading system message for providers that support the role", () => {
+    for (const provider of ["openai", "anthropic"]) {
+      const result = renderLayeredInjection(requestFor(provider), LAYERS, BUDGETS, {
+        provider,
+      });
+      const messages = messagesFrom(result.body);
 
-  it("should inject as user role for provider=glm-cn", () => {
-    const result = injectMemory(baseRequest, testMemories, "glm-cn");
-    assert.equal(result.messages[0].role, "user");
-  });
-
-  it("should inject as user role for provider=zai", () => {
-    const result = injectMemory(baseRequest, testMemories, "zai");
-    assert.equal(result.messages[0].role, "user");
-  });
-
-  it("should inject as user role for provider=qianfan", () => {
-    const result = injectMemory(baseRequest, testMemories, "qianfan");
-    assert.equal(result.messages[0].role, "user");
-  });
-
-  it("should inject as system role for provider=openai (regression)", () => {
-    const result = injectMemory(baseRequest, testMemories, "openai");
-    assert.equal(result.messages[0].role, "system");
-  });
-
-  it("should inject as system role for provider=anthropic (regression)", () => {
-    const result = injectMemory(baseRequest, testMemories, "anthropic");
-    assert.equal(result.messages[0].role, "system");
-  });
-
-  it("should not modify original request", () => {
-    const original = { ...baseRequest, messages: [...baseRequest.messages] };
-    injectMemory(baseRequest, testMemories, "glm");
-    assert.equal(baseRequest.messages.length, original.messages.length);
-  });
-});
-
-// ── normalizeSystemRole — GLM model names ──────────────────────────────────────
-
-describe("normalizeSystemRole — GLM model names (#1701)", () => {
-  it("should preserve system role for glm-5.1 (GLM 5.1+ accepts system, #5610)", () => {
-    const messages = [
-      { role: "system", content: "Memory context: test" },
-      { role: "user", content: "Hello" },
-    ];
-    const result = normalizeSystemRole(messages, "glm", "glm-5.1");
-    assert.ok(Array.isArray(result));
-    const roles = (result as { role: string }[]).map((m) => m.role);
-    // GLM 5.1 / 5.2 (and newer) accept the `system` role per z.ai docs (#5610), so it
-    // must NOT be folded into the first user turn — unlike bare "glm" and the 4.x / 5.0
-    // families (covered below), which still reject system and get converted.
-    assert.ok(roles.includes("system"), "system role should be preserved for glm-5.1");
-    assert.ok(roles.includes("user"), "should have user role");
-  });
-
-  it("should convert system→user for glm-4.7", () => {
-    const messages = [
-      { role: "system", content: "Instructions" },
-      { role: "user", content: "Hello" },
-    ];
-    const result = normalizeSystemRole(messages, "glm", "glm-4.7");
-    const roles = (result as { role: string }[]).map((m) => m.role);
-    assert.ok(!roles.includes("system"));
-  });
-
-  it("should convert system→user for exact model id 'glm'", () => {
-    const messages = [
-      { role: "system", content: "Memory" },
-      { role: "user", content: "Hello" },
-    ];
-    const result = normalizeSystemRole(messages, "pollinations", "glm");
-    const roles = (result as { role: string }[]).map((m) => m.role);
-    assert.ok(!roles.includes("system"));
-  });
-
-  it("should convert system→user for ernie models", () => {
-    const messages = [
-      { role: "system", content: "Memory" },
-      { role: "user", content: "Hello" },
-    ];
-    const result = normalizeSystemRole(messages, "qianfan", "ernie-4.5-turbo-128k");
-    const roles = (result as { role: string }[]).map((m) => m.role);
-    assert.ok(!roles.includes("system"));
-  });
-
-  it("should preserve system role for openai models (regression)", () => {
-    const messages = [
-      { role: "system", content: "Instructions" },
-      { role: "user", content: "Hello" },
-    ];
-    const result = normalizeSystemRole(messages, "openai", "gpt-5.4");
-    const roles = (result as { role: string }[]).map((m) => m.role);
-    assert.ok(roles.includes("system"), "system role should be preserved");
+      assert.equal(result.systemPlacement, "leading-prepended", provider);
+      assert.equal(messages[0].role, "system", provider);
+      assert.match(messages[0].content, /\[L3 stable context\]/, provider);
+      assert.equal(messages[1].role, "user", provider);
+      assert.match(messages[1].content, /<relevant-memories>/, provider);
+      assert.equal(messages[2].content, "Hello", provider);
+    }
   });
 });

@@ -19,7 +19,7 @@ Two opt-in compose profiles (`memory`, `bifrost`) for the existing 8-service dep
 OmniRoute's existing deployment shape is already lean and proven:
 
 - **`redis:7-alpine`** handles the rate-limit/cache workload at production scale.
-- **SQLite + sqlite-vec + FTS5** cover local memory + vector + text-search (see [`src/lib/memory/vectorStore.ts:108`](../../src/lib/memory/vectorStore.ts)).
+- **SQLite + sqlite-vec + FTS5** cover local memory + vector + text-search (see [`src/memory/vectorStore.ts:108`](../../src/memory/vectorStore.ts)).
 - **Caddy** is already the LB + TLS terminator ([`docker-compose.yml`](../../docker-compose.yml)).
 - **Bifrost** is already integrated as the Tier-1 router in [`src/app/api/v1/relay/chat/completions/bifrost/route.ts`](../../src/app/api/v1/relay/chat/completions/bifrost/route.ts) (sidecar proxy with kill switch via `BIFROST_ENABLED` env var — set `=0` to bypass the sidecar and fall through to the TS path).
 
@@ -41,7 +41,7 @@ The two profiles here are **scale-out options for deployments that hit the SQLit
 | -------- | ----------------------- | ----------- | ----------------------------------------------------- |
 | `qdrant` | `qdrant/qdrant:v1.12.4` | `6333` HTTP | HNSW index; persistent volume `omniroute_qdrant_data` |
 
-**Activation:** flip `qdrantEnabled = true` in the Settings UI **or** set `QDRANT_HOST=qdrant` env. See [`src/lib/memory/qdrant.ts:60`](../../src/lib/memory/qdrant.ts) for the precedence rules (settings table → env var → default).
+**Activation:** ~~flip `qdrantEnabled = true` in the Settings UI **or** set `QDRANT_HOST=qdrant` env~~ — **superseded by the v4.0 four-layer cutover**: the Qdrant sidecar profile, the `qdrantEnabled` setting, and the `QDRANT_*` env vars were all removed (see [`docs/frameworks/MEMORY.md`](../frameworks/MEMORY.md)). This decision record is kept for history; the `memory` compose profile no longer exists.
 
 **Env vars:** `QDRANT_HOST`, `QDRANT_PORT`, `QDRANT_API_KEY`, `QDRANT_COLLECTION`, `QDRANT_VECTOR_SIZE`, `QDRANT_HNSW_EF_CONSTRUCT` (see `.env.example` lines 1672-1683).
 

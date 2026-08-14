@@ -61,24 +61,24 @@ Content-Type: application/json
 
 ### Custom Headers
 
-| Header                   | Direction | Description                                                                                                                                                                       |
-| ------------------------ | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `X-OmniRoute-No-Cache`   | Request   | Set to `true` to bypass cache                                                                                                                                                     |
-| `x-omniroute-no-memory`  | Request   | Set to `true` to skip memory + skills injection for this request (mirrors no-cache; avoids the per-call token/cost overhead)                                                      |
-| `X-OmniRoute-Progress`   | Request   | Set to `true` for progress events                                                                                                                                                 |
-| `X-Session-Id`           | Request   | Sticky session key for external session affinity                                                                                                                                  |
-| `x_session_id`           | Request   | Underscore variant also accepted (direct HTTP)                                                                                                                                    |
-| `X-OmniRoute-Session-Id` | Request   | Caller-supplied session/conversation tag (also feeds memory). When present, persisted verbatim to `call_logs.session_tag` for per-session cost attribution (#8249) — never synthesized when absent |
-| `Idempotency-Key`        | Request   | Dedup key (5s window)                                                                                                                                                             |
-| `X-Request-Id`           | Request   | Alternative dedup key                                                                                                                                                             |
-| `X-OmniRoute-Cache`      | Response  | `HIT` or `MISS` (non-streaming)                                                                                                                                                   |
-| `X-OmniRoute-Idempotent` | Response  | `true` if deduplicated                                                                                                                                                            |
-| `X-OmniRoute-Progress`   | Response  | `enabled` if progress tracking on                                                                                                                                                 |
-| `X-OmniRoute-Session-Id` | Response  | Effective session ID used by OmniRoute                                                                                                                                            |
-| `X-OmniRoute-Request-Id` | Response  | Request correlation id (when known)                                                                                                                                               |
-| `X-OmniRoute-Version`    | Response  | OmniRoute build version (always present)                                                                                                                                          |
-| `X-OmniRoute-Cost-Saved` | Response  | USD the cache avoided on a HIT (cache hits only)                                                                                                                                  |
-| `X-OmniRoute-Decision`   | Response  | Routing trace: `strategy=<name>; provider=<alias>; latency_ms=<n>` (`<name>` is the combo strategy, or `single` for a non-combo request) — always present on completion responses |
+| Header                   | Direction | Description                                                                                                                                                                                                                    |
+| ------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `X-OmniRoute-No-Cache`   | Request   | Set to `true` to bypass cache                                                                                                                                                                                                  |
+| `x-omniroute-no-memory`  | Request   | Set to `true` to skip memory capture and injection (L0/L1/L2/L3) for this request. Always honoured, regardless of per-key or global defaults. Mirrors no-cache. (`open-sse/handlers/chatCore/headers.ts::isNoMemoryRequested`) |
+| `X-OmniRoute-Progress`   | Request   | Set to `true` for progress events                                                                                                                                                                                              |
+| `X-Session-Id`           | Request   | Sticky session key for external session affinity                                                                                                                                                                               |
+| `x_session_id`           | Request   | Underscore variant also accepted (direct HTTP)                                                                                                                                                                                 |
+| `X-OmniRoute-Session-Id` | Request   | Caller-supplied session/conversation tag (also feeds memory). When present, persisted verbatim to `call_logs.session_tag` for per-session cost attribution (#8249) — never synthesized when absent                             |
+| `Idempotency-Key`        | Request   | Dedup key (5s window)                                                                                                                                                                                                          |
+| `X-Request-Id`           | Request   | Alternative dedup key                                                                                                                                                                                                          |
+| `X-OmniRoute-Cache`      | Response  | `HIT` or `MISS` (non-streaming)                                                                                                                                                                                                |
+| `X-OmniRoute-Idempotent` | Response  | `true` if deduplicated                                                                                                                                                                                                         |
+| `X-OmniRoute-Progress`   | Response  | `enabled` if progress tracking on                                                                                                                                                                                              |
+| `X-OmniRoute-Session-Id` | Response  | Effective session ID used by OmniRoute                                                                                                                                                                                         |
+| `X-OmniRoute-Request-Id` | Response  | Request correlation id (when known)                                                                                                                                                                                            |
+| `X-OmniRoute-Version`    | Response  | OmniRoute build version (always present)                                                                                                                                                                                       |
+| `X-OmniRoute-Cost-Saved` | Response  | USD the cache avoided on a HIT (cache hits only)                                                                                                                                                                               |
+| `X-OmniRoute-Decision`   | Response  | Routing trace: `strategy=<name>; provider=<alias>; latency_ms=<n>` (`<name>` is the combo strategy, or `single` for a non-combo request) — always present on completion responses                                              |
 
 > Nginx note: if you rely on underscore headers (for example `x_session_id`), enable `underscores_in_headers on;`.
 
@@ -349,9 +349,9 @@ Web/search provider abstraction (Tavily, Brave, Exa, Serper, etc.).
 Extract content from a URL via a configured web-fetch provider (Firecrawl, Jina
 Reader, Tavily Extract, TinyFish Fetch).
 
-| Method | Path           | Description                                                              |
-| ------ | -------------- | ------------------------------------------------------------------------- |
-| POST   | `/v1/web/fetch` | Fetch/scrape a URL — body validated by `v1WebFetchSchema`               |
+| Method | Path            | Description                                               |
+| ------ | --------------- | --------------------------------------------------------- |
+| POST   | `/v1/web/fetch` | Fetch/scrape a URL — body validated by `v1WebFetchSchema` |
 
 **Auth:** Bearer API key (`extractApiKey` + `isValidApiKey`). Policy enforced via `enforceApiKeyPolicy`.
 
@@ -525,15 +525,15 @@ Response example:
 
 ### Usage & Analytics
 
-| Endpoint                    | Method          | Description                     |
-| --------------------------- | --------------- | ------------------------------- |
-| `/api/usage/history`        | GET             | Usage history                   |
-| `/api/usage/logs`           | GET             | Usage logs                      |
-| `/api/usage/request-logs`   | GET             | Request-level logs              |
-| `/api/usage/[connectionId]` | GET             | Per-connection usage            |
-| `/api/usage/token-limits`   | GET/POST/DELETE | Per-API-key token-limit budgets |
-| `/api/usage/model-latency-stats` | GET        | Rolling per-provider/model latency aggregate (avg/p50/p95/p99, success rate); filters: `windowHours`/`minSamples`/`maxRows`/`provider`/`model` (#6873) |
-| `/api/usage/cache-health`   | GET             | Prompt-cache health summary over `call_logs` — write/read ratio, p50/p90/p99 write-size distribution, heavy-write concentration, per-model split, and a `healthy`/`degraded`/`thrash`/`no-data` verdict; query params `range` (`1h`\|`24h`\|`7d`\|`30d`, default `24h`) and optional `model` (#8827) |
+| Endpoint                         | Method          | Description                                                                                                                                                                                                                                                                                          |
+| -------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/api/usage/history`             | GET             | Usage history                                                                                                                                                                                                                                                                                        |
+| `/api/usage/logs`                | GET             | Usage logs                                                                                                                                                                                                                                                                                           |
+| `/api/usage/request-logs`        | GET             | Request-level logs                                                                                                                                                                                                                                                                                   |
+| `/api/usage/[connectionId]`      | GET             | Per-connection usage                                                                                                                                                                                                                                                                                 |
+| `/api/usage/token-limits`        | GET/POST/DELETE | Per-API-key token-limit budgets                                                                                                                                                                                                                                                                      |
+| `/api/usage/model-latency-stats` | GET             | Rolling per-provider/model latency aggregate (avg/p50/p95/p99, success rate); filters: `windowHours`/`minSamples`/`maxRows`/`provider`/`model` (#6873)                                                                                                                                               |
+| `/api/usage/cache-health`        | GET             | Prompt-cache health summary over `call_logs` — write/read ratio, p50/p90/p99 write-size distribution, heavy-write concentration, per-model split, and a `healthy`/`degraded`/`thrash`/`no-data` verdict; query params `range` (`1h`\|`24h`\|`7d`\|`30d`, default `24h`) and optional `model` (#8827) |
 
 ### Settings
 
@@ -1017,17 +1017,36 @@ Skill framework for extending OmniRoute with custom executable handlers, plus ma
 
 ## Memory
 
-Persistent conversational/factual memory store, scoped per API key / session.
+Four-layer memory (L0 raw / L1 typed / L2 navigation / L3 working) backed by a
+standalone `<DATA_DIR>/memory.db` (SQLite, WAL). No Redis, no Qdrant, no
+external vector store. Capture and injection are off by default and scoped per
+API key. See [Memory System](../frameworks/MEMORY.md) for the full architecture.
 
-| Method | Path                 | Description                                                                                                  |
-| ------ | -------------------- | ------------------------------------------------------------------------------------------------------------ |
-| GET    | `/api/memory`        | List memories — `?apiKeyId=`, `?type=`, `?sessionId=`, `?q=`, with `offset/limit` or `page/limit` pagination |
-| POST   | `/api/memory`        | Create memory — body validated by Zod: `{content, key, type?, sessionId?, apiKeyId?, metadata?, expiresAt?}` |
-| GET    | `/api/memory/[id]`   | Retrieve one memory                                                                                          |
-| DELETE | `/api/memory/[id]`   | Delete a memory                                                                                              |
-| GET    | `/api/memory/health` | Memory subsystem health (DB connectivity, embeddings backend, vector index status)                           |
+### Four-layer endpoints
 
-**Auth:** management session/API key (`requireManagementAuth`). `type` enum: `FACTUAL`, `EPISODIC`, `SEMANTIC`, `PROCEDURAL` (see `MemoryType` in `src/lib/memory/types.ts`).
+| Method   | Path                  | Description                                                                                                                                            |
+| -------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET`    | `/api/memory/l0`      | Read raw L0 turns — `?apiKeyId=`, `?conversationId=`, `?from=`, `?to=`, `?limit=` (default 100, max 1000)                                              |
+| `GET`    | `/api/memory/l1`      | List L1 facts — `?apiKeyId=`, `?type=`, `?key=`, `?limit=`, `?offset=`. `type` ∈ `{preference, fact, decision, pattern, profile, context, correction}` |
+| `POST`   | `/api/memory/l1`      | Upsert an L1 fact — body: `{apiKeyId, type, key, content, metadata?}` (Zod-validated; dedups on `(apiKeyId, type, key)`)                               |
+| `DELETE` | `/api/memory/l1/{id}` | Delete one L1 fact                                                                                                                                     |
+| `GET`    | `/api/memory/l2`      | List L2 navigation entries — `?apiKeyId=`, `?conversationId=`. Capped at 15 per conversation.                                                          |
+| `PUT`    | `/api/memory/l2`      | Replace the L2 navigation set — body: `{apiKeyId, conversationId, entries: [{pointer, activation, label?}]}`                                           |
+| `GET`    | `/api/memory/l3`      | Read the L3 singleton — `?apiKeyId=`, `?conversationId=`. Returns `{branch, guideId?, scratchpad, updatedAt}`                                          |
+| `PUT`    | `/api/memory/l3`      | Replace the L3 singleton — body: `{apiKeyId, conversationId, branch: "chat"\|"code", guideId?, scratchpad?}`                                           |
+
+### Maintenance endpoints
+
+| Method | Path                             | Description                                                                                                     |
+| ------ | -------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `POST` | `/api/memory/regenerate`         | Force re-distillation of one L0 batch — body: `{apiKeyId, conversationId, batchId}`                             |
+| `GET`  | `/api/memory/distillation-model` | Inspect the distillation selector chain — returns `{enabled, model, source, candidates}`                        |
+| `PUT`  | `/api/memory/distillation-model` | Override the distillation model — body: `{model: "provider/model" \| null}`                                     |
+| `GET`  | `/api/memory/distillation/dlq`   | List failed distillation batches — `?apiKeyId=`, `?conversationId=`, `?since=`, `?limit=` (default 50, max 500) |
+
+**Auth:** management session/API key (`requireManagementAuth`) for all routes. Per-API-key access via the `memory.inject` scope is honored on `/api/memory/l0` reads (L1/L2/L3 writes always require management auth). All error responses are routed through `sanitizeErrorMessage()` (`open-sse/utils/error.ts`) — no raw `err.stack` / `err.message` in response bodies.
+
+> **Removed in v4.0 (no compat shim):** `/api/memory` (root CRUD), `/api/memory/{id}`, `/api/memory/health`, `/api/memory/engine-status`, `/api/memory/reindex`, `/api/memory/retrieve-preview`, `/api/memory/summarize`, `/api/memory/embedding-providers`, `/api/settings/memory`, `/api/settings/qdrant/*`. These routes return `404 Not Found`. See [Memory System](../frameworks/MEMORY.md#rest-api) for the migration map.
 
 ---
 
@@ -1339,20 +1358,29 @@ Manage the semantic cache and reasoning cache.
 
 ## Memory System
 
-Manage persistent memory (FTS5 + vector embeddings).
+Four-layer memory (L0 raw / L1 typed / L2 navigation / L3 working) backed by a
+standalone `<DATA_DIR>/memory.db` (SQLite, WAL). No Redis, no Qdrant, no
+external vector store. Capture and injection are off by default and scoped per
+API key. The four-layer routes are documented in the [Memory](#memory)
+section above; the routes listed here are duplicated for the table-of-contents
+search but should be edited in the canonical section above.
 
-| Method | Path                 | Description                                                           |
-| ------ | -------------------- | --------------------------------------------------------------------- |
-| GET    | `/api/memory`        | List memory entries (filter by scope, type, search query)             |
-| POST   | `/api/memory`        | Create a new memory entry — body: `{scope, type, content, metadata?}` |
-| GET    | `/api/memory/[id]`   | Get a specific memory entry                                           |
-| PUT    | `/api/memory/[id]`   | Update a memory entry                                                 |
-| DELETE | `/api/memory/[id]`   | Delete a memory entry                                                 |
-| GET    | `/api/memory/search` | Search memory (FTS5 + vector)                                         |
-| POST   | `/api/memory/clear`  | Clear memory entries (with filters)                                   |
-| GET    | `/api/memory/stats`  | Memory statistics (total entries, embedding coverage, etc.)           |
+| Method   | Path                             | Description                                                            |
+| -------- | -------------------------------- | ---------------------------------------------------------------------- |
+| `GET`    | `/api/memory/l0`                 | Read raw L0 turns (window by conversation id / turn id)                |
+| `GET`    | `/api/memory/l1`                 | List L1 typed facts                                                    |
+| `POST`   | `/api/memory/l1`                 | Upsert an L1 fact                                                      |
+| `DELETE` | `/api/memory/l1/{id}`            | Delete an L1 fact                                                      |
+| `GET`    | `/api/memory/l2`                 | List L2 navigation entries (≤15 per conversation)                      |
+| `PUT`    | `/api/memory/l2`                 | Replace the L2 navigation set                                          |
+| `GET`    | `/api/memory/l3`                 | Read the L3 singleton (branch `chat` or `code` + scratchpad + guideId) |
+| `PUT`    | `/api/memory/l3`                 | Replace the L3 singleton                                               |
+| `POST`   | `/api/memory/regenerate`         | Force re-distillation of one L0 batch                                  |
+| `GET`    | `/api/memory/distillation-model` | Inspect the distillation selector chain                                |
+| `PUT`    | `/api/memory/distillation-model` | Override the distillation model                                        |
+| `GET`    | `/api/memory/distillation/dlq`   | List failed distillation batches                                       |
 
-**Auth:** Requires management session or management-scoped API key.
+**Auth:** Requires management session or management-scoped API key for all routes. Per-API-key `memory.inject` scope is honored on `/api/memory/l0` reads.
 
 ---
 

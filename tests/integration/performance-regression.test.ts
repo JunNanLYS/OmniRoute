@@ -17,94 +17,75 @@ import path from "node:path";
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-perf-regression-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.REQUIRE_API_KEY = "false";
+process.env.DISABLE_SQLITE_AUTO_BACKUP = "true";
 if (!process.env.API_KEY_SECRET) {
   process.env.API_KEY_SECRET = "test-perf-secret-" + Date.now();
 }
 
 // --- Dynamic imports after env setup ---
 const core = await import("../../src/lib/db/core.ts");
-const { createApiKey } = await import("../../src/lib/db/apiKeys.ts");
-const { createMemory, listMemories, deleteMemory } = await import("../../src/lib/memory/store.ts");
-const { retrieveMemories } = await import("../../src/lib/memory/retrieval.ts");
-const { MemoryType } = await import("../../src/lib/memory/types.ts");
+const memoryCore = await import("../../src/memory/db/core.ts");
+const { createMemory } = await import("../../src/memory/l1.ts");
+const { ownerFromApiKeyId, PRODUCTION_RECALL_PROVIDER } =
+  await import("../../src/memory/integration/runtime.ts");
 const { skillRegistry } = await import("../../src/lib/skills/registry.ts");
-const { GET: memoryRouteGET } = await import("../../src/app/api/memory/route.ts");
-
-// --- Work around FTS5 trigger bug ---
-// Migration 022_add_memory_fts5.sql creates FTS5 with content_rowid='id' expecting
-// INTEGER rowids, but memories.id is TEXT (UUID). The triggers fail with
-// SQLITE_MISMATCH on INSERT. Drop them so createMemory() works.
-// Also drop the memory_fts table since FTS5 can't work with TEXT rowids.
-// retrieveMemories() has a fallback that uses keyword scoring when FTS5 is unavailable.
-const _db = core.getDbInstance();
-_db.exec("DROP TRIGGER IF EXISTS memory_fts_ai");
-_db.exec("DROP TRIGGER IF EXISTS memory_fts_ad");
-_db.exec("DROP TRIGGER IF EXISTS memory_fts_au");
-_db.exec("DROP TABLE IF EXISTS memory_fts");
 
 // --- Constants ---
 const TEST_API_KEY_ID = "perf-test-api-key";
-const TEST_MACHINE_ID = "perf-test-machine";
-const TEST_SESSION_ID = "perf-test-session";
 const MEMORY_COUNT = 1000;
 const SKILL_COUNT = 100;
-let managementApiKey = "";
 
 // --- Thresholds (2x buffer for CI) ---
-const THRESHOLD_LIST_MEMORIES_MS = 200;
+const THRESHOLD_L1_RECALL_MS = 400;
 const THRESHOLD_SKILLS_CACHED_MS = 100;
 const THRESHOLD_SKILLS_UNCACHED_MS = 400;
-const THRESHOLD_SEARCH_MS = 400;
-const THRESHOLD_API_ROUTE_MS = 1000;
 
 // --- Helpers ---
-function makeMemoryData(index) {
+function makeMemoryData(index: number) {
   return {
-    apiKeyId: TEST_API_KEY_ID,
-    sessionId: TEST_SESSION_ID,
-    type: MemoryType.FACTUAL,
-    key: `perf-test-key-${index}`,
-    content: `This is test memory content number ${index} for performance regression testing purposes`,
+    owner: ownerFromApiKeyId(TEST_API_KEY_ID),
+    type: "work_fact" as const,
+    priority: 50,
+    sceneName: "performance",
+    sourceMessageIds: [],
     metadata: { index, tag: "perf-test" },
-    expiresAt: null,
+    content: `This is test memory content number ${index} for performance regression testing purposes`,
+    lastModifiedBy: "pipeline" as const,
+    editedByUser: false,
   };
 }
 
 // ============================================================
-// Test 1: listMemories with 1000 records, paginated (page=1, limit=50)
+// Test 1: Live four-layer L1 recall over 1000 owner-scoped records
 // ============================================================
-describe("Performance: listMemories pagination (1000 records)", () => {
-  const createdIds = [];
-
-  before(async () => {
-    // Bulk insert 1000 memories
+describe("Performance: four-layer L1 recall (1000 records)", () => {
+  before(() => {
     for (let i = 0; i < MEMORY_COUNT; i++) {
-      const mem = await createMemory(makeMemoryData(i));
-      createdIds.push(mem.id);
+      createMemory(makeMemoryData(i));
     }
-    assert.equal(createdIds.length, MEMORY_COUNT, "Should have created 1000 memories");
   });
 
-  after(async () => {
-    // Bulk delete all created memories
-    const db = core.getDbInstance();
-    db.prepare("DELETE FROM memories WHERE api_key_id = ?").run(TEST_API_KEY_ID);
+  after(() => {
+    memoryCore.resetMemoryDbInstance();
   });
 
-  it(`should list page=1, limit=50 of 1000 memories in <${THRESHOLD_LIST_MEMORIES_MS}ms`, async () => {
+  it(`should recall query-matching L1 memories in <${THRESHOLD_L1_RECALL_MS}ms`, async () => {
     const start = performance.now();
-    const result = await listMemories({
-      apiKeyId: TEST_API_KEY_ID,
-      page: 1,
-      limit: 50,
+    const results = await PRODUCTION_RECALL_PROVIDER.fetchL1({
+      ownerId: TEST_API_KEY_ID,
+      sessionId: "perf-test-session",
+      query: "performance regression testing",
     });
     const elapsed = performance.now() - start;
 
-    assert.equal(result.data.length, 50, "Should return 50 items for page 1");
-    assert.equal(result.total, MEMORY_COUNT, "Total should be 1000");
+    assert.equal(results.length, MEMORY_COUNT, "Should find all matching owner memories");
     assert.ok(
-      elapsed < THRESHOLD_LIST_MEMORIES_MS,
-      `listMemories took ${elapsed.toFixed(1)}ms, expected <${THRESHOLD_LIST_MEMORIES_MS}ms`
+      results.every((memory) => /performance regression testing/i.test(memory.content)),
+      "Every recalled item should match the focused query"
+    );
+    assert.ok(
+      elapsed < THRESHOLD_L1_RECALL_MS,
+      `Four-layer L1 recall took ${elapsed.toFixed(1)}ms, expected <${THRESHOLD_L1_RECALL_MS}ms`
     );
   });
 });
@@ -164,95 +145,8 @@ describe("Performance: skills registry cached vs uncached", () => {
   });
 });
 
-// ============================================================
-// Test 3: Search over 1000 memories (keyword scoring fallback)
-//
-// Note: FTS5 triggers are dropped due to a content_rowid bug (TEXT vs INTEGER).
-// retrieveMemories() falls back to chronological + getRelevanceScore() keyword
-// scoring, which is the production fallback path we validate here.
-// ============================================================
-describe("Performance: memory search (1000 records)", () => {
-  const createdIds = [];
-
-  before(async () => {
-    // Bulk insert 1000 memories with searchable content
-    for (let i = 0; i < MEMORY_COUNT; i++) {
-      const mem = await createMemory(makeMemoryData(i));
-      createdIds.push(mem.id);
-    }
-    assert.equal(createdIds.length, MEMORY_COUNT, "Should have created 1000 memories");
-  });
-
-  after(async () => {
-    const db = core.getDbInstance();
-    db.prepare("DELETE FROM memories WHERE api_key_id = ?").run(TEST_API_KEY_ID);
-  });
-
-  it(`should search memories with retrieveMemories (query="test") in <${THRESHOLD_SEARCH_MS}ms`, async () => {
-    const start = performance.now();
-    const results = await retrieveMemories(TEST_API_KEY_ID, {
-      query: "test",
-      retrievalStrategy: "semantic",
-      maxTokens: 8000,
-    });
-    const elapsed = performance.now() - start;
-
-    assert.ok(results.length > 0, "Should find matching memories");
-    assert.ok(
-      elapsed < THRESHOLD_SEARCH_MS,
-      `retrieveMemories search took ${elapsed.toFixed(1)}ms, expected <${THRESHOLD_SEARCH_MS}ms`
-    );
-  });
-});
-
-// ============================================================
-// Test 4: API route handler GET /api/memory?limit=50
-// ============================================================
-describe("Performance: memory API route handler (1000 records)", () => {
-  before(async () => {
-    const key = await createApiKey("performance regression management", TEST_MACHINE_ID, [
-      "manage",
-    ]);
-    managementApiKey = key.key;
-
-    // Bulk insert 1000 memories
-    for (let i = 0; i < MEMORY_COUNT; i++) {
-      await createMemory(makeMemoryData(i));
-    }
-  });
-
-  after(async () => {
-    const db = core.getDbInstance();
-    db.prepare("DELETE FROM memories WHERE api_key_id = ?").run(TEST_API_KEY_ID);
-    // Final cleanup: reset DB instance and remove temp dir
-    core.resetDbInstance();
-    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
-  });
-
-  it(`should handle GET /api/memory?limit=50 in <${THRESHOLD_API_ROUTE_MS}ms`, async () => {
-    // Create a mock Request object for the route handler
-    const request = new Request(
-      `http://localhost:20128/api/memory?limit=50&apiKeyId=${TEST_API_KEY_ID}`,
-      {
-        method: "GET",
-        headers: { authorization: `Bearer ${managementApiKey}` },
-      }
-    );
-
-    const start = performance.now();
-    const response = await memoryRouteGET(request);
-    const elapsed = performance.now() - start;
-
-    assert.equal(response.status, 200, "Response should be 200 OK");
-
-    const body = (await response.json()) as any;
-    assert.equal(body.data.length, 50, "Should return 50 items");
-    assert.equal(body.total, MEMORY_COUNT, "Total should be 1000");
-    assert.ok(body.stats, "Response should include stats");
-
-    assert.ok(
-      elapsed < THRESHOLD_API_ROUTE_MS,
-      `API route handler took ${elapsed.toFixed(1)}ms, expected <${THRESHOLD_API_ROUTE_MS}ms`
-    );
-  });
+after(() => {
+  memoryCore.resetMemoryDbInstance();
+  core.resetDbInstance();
+  fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 });

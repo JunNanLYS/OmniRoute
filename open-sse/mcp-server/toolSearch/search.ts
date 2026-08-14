@@ -2,8 +2,7 @@
  * searchTools — pure lexical scoring over tool names + descriptions.
  *
  * Anti-ReDoS: never compiles `new RegExp(query)`.
- * Uses only `String.prototype.indexOf` loops (same pattern as
- * `src/lib/memory/retrieval.ts::getRelevanceScore`).
+ * Uses only `String.prototype.indexOf` loops over normalized lexical tokens.
  */
 
 export interface ToolCatalogEntry {
@@ -68,11 +67,7 @@ function scoreEntry(entry: ToolCatalogEntry, normalizedQuery: string, tokens: st
  * Search tool catalog entries lexically (no RegExp on user input).
  * Returns top-K results ordered by score desc, name asc for ties.
  */
-export function searchTools(
-  entries: ToolCatalogEntry[],
-  query: string,
-  limit = 8
-): ScoredTool[] {
+export function searchTools(entries: ToolCatalogEntry[], query: string, limit = 8): ScoredTool[] {
   const clampedLimit = Math.max(MIN_LIMIT, Math.min(MAX_LIMIT, limit));
   const normalizedQuery = query.trim().toLowerCase();
   if (!normalizedQuery) return [];

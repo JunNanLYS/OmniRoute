@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strict": false,
+    "noImplicitAny": false,
+    "noEmit": true,
+    "incremental": false,
+    "skipLibCheck": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@omniroute/open-sse": ["./open-sse"],
+      "@omniroute/open-sse/*": ["./open-sse/*"]
+    }
+  },
+  "include": [
+    "src/memory/distillation/**/*.ts",
+    "src/shared/utils/testProcess.ts",
+    "src/shared/utils/circuitBreaker.ts",
+    "src/lib/db/core.ts",
+    "src/lib/db/domainState.ts",
+    "open-sse/executors/base.ts",
+    "open-sse/utils/logger.ts"
+  ]
+}

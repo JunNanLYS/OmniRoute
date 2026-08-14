@@ -63,17 +63,27 @@ test("administrative pricing and routing routes require management authenticatio
   }
 });
 
-test("memory management routes require management authentication", () => {
-  const routePaths = ["src/app/api/memory/route.ts", "src/app/api/memory/[id]/route.ts"];
+test("four-layer memory routes enforce authenticated owner scope", () => {
+  const routePaths = [
+    "src/app/api/memory/l0/route.ts",
+    "src/app/api/memory/l0/[id]/route.ts",
+    "src/app/api/memory/l1/route.ts",
+    "src/app/api/memory/l1/[id]/route.ts",
+    "src/app/api/memory/l2/route.ts",
+    "src/app/api/memory/l2/[id]/route.ts",
+    "src/app/api/memory/l2/[id]/regenerate/route.ts",
+    "src/app/api/memory/l3/route.ts",
+    "src/app/api/memory/l3/[id]/route.ts",
+  ];
 
   for (const routePath of routePaths) {
     const content = fs.readFileSync(routePath, "utf8");
-    assert.ok(content.includes('from "@/lib/api/requireManagementAuth"'), routePath);
+    assert.ok(content.includes('from "@/memory/api/handlers/_lib"'), routePath);
+    assert.ok(content.includes("resolveOwner(request)"), routePath);
     assert.ok(
-      content.includes("const authError = await requireManagementAuth(request);"),
+      content.includes('if ("errorResponse" in owner) return owner.errorResponse;'),
       routePath
     );
-    assert.ok(content.includes("if (authError) return authError;"), routePath);
   }
 });
 
@@ -284,13 +294,8 @@ test("management routes sanitize error.message before returning it to clients", 
   }
 });
 
-test("memory health endpoint requires management authentication", () => {
-  // verifyExtractionPipeline() exposes the memory subsystem state (Qdrant
-  // reachability, DB error paths). Same precedent as /api/db/health and
-  // /api/monitoring/health, which require management auth.
-  const routePath = "src/app/api/memory/health/route.ts";
-  const content = fs.readFileSync(routePath, "utf8");
-  assert.ok(content.includes('from "@/lib/api/requireManagementAuth"'));
-  assert.ok(content.includes("const authError = await requireManagementAuth(request);"));
-  assert.ok(content.includes("if (authError) return authError;"));
+test("four-layer memory API has no legacy health endpoint", () => {
+  assert.equal(fs.existsSync("src/app/api/memory/health/route.ts"), false);
+  assert.equal(fs.existsSync("src/app/api/memory/route.ts"), false);
+  assert.equal(fs.existsSync("src/app/api/memory/[id]/route.ts"), false);
 });

@@ -1021,8 +1021,12 @@ export function createMcpServer(): McpServer {
             const result = await toolDef.handler(parsedArgs, extra);
             return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
           } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            return { content: [{ type: "text" as const, text: `Error: ${msg}` }], isError: true };
+            // Hard Rule #12 — sanitize thrown messages so we never leak
+            // err.stack / absolute source paths through the MCP response.
+            return {
+              content: [{ type: "text" as const, text: `Error: ${sanitizeErrorMessage(err)}` }],
+              isError: true,
+            };
           }
         },
         toolDef.scopes

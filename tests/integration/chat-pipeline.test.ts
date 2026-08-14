@@ -16,7 +16,13 @@ const settingsDb = await import("../../src/lib/db/settings.ts");
 const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const readCacheDb = await import("../../src/lib/db/readCache.ts");
 const { getLatestCallLog, getResponsesCallLogs } = await import("./_chatPipelineCallLogs.ts");
-const { invalidateMemorySettingsCache } = await import("../../src/lib/memory/settings.ts");
+const {
+  DEFAULT_MEMORY_PIPELINE_SETTINGS,
+  resetMemoryPipelineSettingsResolverForTests,
+  setMemoryPipelineSettingsResolver,
+} = await import("../../src/memory/integration/settings.ts");
+const { resetRecallProviderForTests, setRecallProvider } =
+  await import("../../src/memory/recall/facade.ts");
 const { skillRegistry } = await import("../../src/lib/skills/registry.ts");
 const { skillExecutor } = await import("../../src/lib/skills/executor.ts");
 const { handleChat } = await import("../../src/sse/handlers/chat.ts");
@@ -369,7 +375,8 @@ async function resetStorage() {
   resetAllCircuitBreakers();
   apiKeysDb.resetApiKeyState();
   readCacheDb.invalidateDbCache();
-  invalidateMemorySettingsCache();
+  resetMemoryPipelineSettingsResolverForTests();
+  resetRecallProviderForTests();
   await new Promise((resolve) => setTimeout(resolve, 20));
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
@@ -414,74 +421,6 @@ async function seedApiKey({
     await apiKeysDb.updateApiKeyPermissions(key.id, updates);
   }
   return key;
-}
-
-function ensureLegacyMemoryTable() {
-  const db = core.getDbInstance();
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS memory (
-      id TEXT PRIMARY KEY,
-      apiKeyId TEXT NOT NULL,
-      sessionId TEXT,
-      type TEXT NOT NULL,
-      key TEXT,
-      content TEXT NOT NULL,
-      metadata TEXT,
-      createdAt TEXT NOT NULL,
-      updatedAt TEXT NOT NULL,
-      expiresAt TEXT
-    )
-  `);
-}
-
-function insertLegacyMemory(apiKeyId, content) {
-  const db = core.getDbInstance();
-  const now = new Date().toISOString();
-  const hasModernTable = Boolean(
-    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memories'").get()
-  );
-
-  if (hasModernTable) {
-    db.prepare(
-      `
-        INSERT INTO memories (
-          id, api_key_id, session_id, type, key, content, metadata, created_at, updated_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `
-    ).run(
-      `mem_${Math.random().toString(16).slice(2, 10)}`,
-      apiKeyId,
-      "",
-      "factual",
-      "pref",
-      content,
-      "{}",
-      now,
-      now,
-      null
-    );
-    return;
-  }
-
-  ensureLegacyMemoryTable();
-  db.prepare(
-    `
-      INSERT INTO memory (
-        id, apiKeyId, sessionId, type, key, content, metadata, createdAt, updatedAt, expiresAt
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `
-  ).run(
-    `mem_${Math.random().toString(16).slice(2, 10)}`,
-    apiKeyId,
-    "",
-    "factual",
-    "pref",
-    content,
-    "{}",
-    now,
-    now,
-    null
-  );
 }
 
 async function waitFor(fn, timeoutMs = 1500) {
@@ -689,7 +628,10 @@ test("chat pipeline applies Codex CLI fingerprint to OAuth responses requests", 
   assert.equal(call.headers.Version, getCodexClientVersion());
   assert.equal(call.headers["Openai-Beta"], "responses=experimental");
   assert.equal(call.headers["X-Codex-Beta-Features"], "responses_websockets");
-  assert.equal(call.headers["User-Agent"], "codex-cli/0.144.1 (Windows 10.0.26200; x64)");
+  assert.equal(
+    call.headers["User-Agent"],
+    `codex-cli/${getCodexClientVersion()} (Windows 10.0.26200; x64)`
+  );
   assert.equal(call.headers["x-codex-window-id"], "conv_codex_fingerprint:0");
   assert.ok(call.headers["x-client-request-id"], "expected Codex request id header");
   assert.ok(call.headers["x-codex-turn-metadata"], "expected Codex turn metadata header");
@@ -1353,19 +1295,35 @@ test("chat pipeline maps upstream timeouts to 504 responses", async () => {
   assert.match(json.error.message, /\[504\]: upstream timed out/);
 });
 
-test("chat pipeline injects memory context before sending the upstream request", async () => {
+test("chat pipeline injects four-layer recall before sending the upstream request", async () => {
   // Reset provider failure state to avoid circuit breaker interference
   clearProviderFailure("openai");
   await seedConnection("openai", { apiKey: "sk-openai-memory" });
   const apiKey = await seedApiKey();
-  await settingsDb.updateSettings({
-    memoryEnabled: true,
-    memoryMaxTokens: 400,
-    memoryRetentionDays: 30,
-    memoryStrategy: "recent",
+  setMemoryPipelineSettingsResolver((ownerId) => {
+    assert.equal(ownerId, apiKey.id);
+    return {
+      ...DEFAULT_MEMORY_PIPELINE_SETTINGS,
+      injectionEnabled: true,
+    };
   });
-  invalidateMemorySettingsCache();
-  insertLegacyMemory(apiKey.id, "User prefers concise answers.");
+  setRecallProvider({
+    fetchL3: async () => [],
+    fetchL2: async () => [],
+    fetchL1: async ({ ownerId, sessionId, query }) => {
+      assert.equal(ownerId, apiKey.id);
+      assert.equal(sessionId, "shared");
+      assert.equal(query, "Summarize my preference");
+      return [
+        {
+          id: "preference",
+          content: "User prefers concise answers.",
+          score: 1,
+          tags: ["preference"],
+        },
+      ];
+    },
+  });
 
   const fetchCalls = [];
   globalThis.fetch = async (url, init: RequestInit = {}) => {
@@ -1391,7 +1349,10 @@ test("chat pipeline injects memory context before sending the upstream request",
   assert.equal(response.status, 200);
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].body.messages[0].role, "system");
-  assert.match(fetchCalls[0].body.messages[0].content, /User prefers concise answers/);
+  assert.match(fetchCalls[0].body.messages[0].content, /MEMORY TOOLS GUIDE/);
+  assert.equal(fetchCalls[0].body.messages[1].role, "user");
+  assert.match(fetchCalls[0].body.messages[1].content, /User prefers concise answers/);
+  assert.equal(fetchCalls[0].body.messages[2].content, "Summarize my preference");
   assert.equal(json.choices[0].message.content, "Memory-aware reply");
 });
 
@@ -1401,7 +1362,6 @@ test("chat pipeline injects skills into tools and intercepts tool calls with ski
   await seedConnection("openai", { apiKey: "sk-openai-skills" });
   const apiKey = await seedApiKey();
   await settingsDb.updateSettings({ skillsEnabled: true });
-  invalidateMemorySettingsCache();
 
   const handlerName = `weather-handler-${Date.now()}`;
   skillExecutor.registerHandler(handlerName, async (input) => ({

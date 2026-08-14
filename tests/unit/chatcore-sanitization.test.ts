@@ -8,9 +8,16 @@ const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-chatcore-
 process.env.DATA_DIR = TEST_DATA_DIR;
 
 const { handleChatCore } = await import("../../open-sse/handlers/chatCore.ts");
-const settingsDb = await import("../../src/lib/db/settings.ts");
-const { createMemory, listMemories } = await import("../../src/lib/memory/store.ts");
-const { invalidateMemorySettingsCache } = await import("../../src/lib/memory/settings.ts");
+const {
+  DEFAULT_MEMORY_PIPELINE_SETTINGS,
+  resetMemoryPipelineSettingsResolverForTests,
+  setMemoryPipelineSettingsResolver,
+} = await import("../../src/memory/integration/settings.ts");
+const { resetRecallProviderForTests, setRecallProvider } =
+  await import("../../src/memory/recall/facade.ts");
+const memoryCore = await import("../../src/memory/db/core.ts");
+const { listMessages } = await import("../../src/memory/l0.ts");
+const { ownerFromApiKeyId } = await import("../../src/memory/integration/runtime.ts");
 const core = await import("../../src/lib/db/core.ts");
 
 function noopLog() {
@@ -66,27 +73,15 @@ function buildUpstreamResponse(stream) {
   );
 }
 
-function ensureLegacyMemoryTable() {
-  const db = core.getDbInstance();
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS memory (
-      id TEXT PRIMARY KEY,
-      apiKeyId TEXT NOT NULL,
-      sessionId TEXT,
-      type TEXT NOT NULL,
-      key TEXT,
-      content TEXT NOT NULL,
-      metadata TEXT,
-      createdAt TEXT NOT NULL,
-      updatedAt TEXT NOT NULL,
-      expiresAt TEXT
-    )
-  `);
-}
-
-async function waitForAsyncMemoryFlush() {
-  await new Promise((resolve) => setImmediate(resolve));
-  await new Promise((resolve) => setTimeout(resolve, 10));
+async function waitForL0Messages(apiKeyId, expectedCount, timeoutMs = 1500) {
+  const owner = ownerFromApiKeyId(apiKeyId);
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const messages = listMessages({ owner });
+    if (messages.length >= expectedCount) return messages;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return listMessages({ owner });
 }
 
 async function invokeChatCore({
@@ -146,12 +141,21 @@ async function invokeChatCore({
   }
 }
 
-test.after(() => {
-  try {
-    const db = core.getDbInstance();
-    db.close();
-  } catch {}
+test.beforeEach(() => {
+  resetMemoryPipelineSettingsResolverForTests();
+  resetRecallProviderForTests();
+});
 
+test.afterEach(() => {
+  resetMemoryPipelineSettingsResolverForTests();
+  resetRecallProviderForTests();
+});
+
+test.after(() => {
+  resetMemoryPipelineSettingsResolverForTests();
+  resetRecallProviderForTests();
+  memoryCore.resetMemoryDbInstance();
+  core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
 });
 
@@ -555,25 +559,31 @@ test("chatCore honors API key JSON stream-default compatibility mode", async () 
   assert.equal(explicitSse.call.headers.Accept, "text/event-stream");
 });
 
-test("chatCore injects memories when enabled and memories are found", async () => {
-  await settingsDb.updateSettings({
-    memoryEnabled: true,
-    memoryMaxTokens: 1024,
-    memoryRetentionDays: 30,
-    memoryStrategy: "recent",
-  });
-  invalidateMemorySettingsCache();
-  ensureLegacyMemoryTable();
-
+test("chatCore injects four-layer recall when injection is enabled", async () => {
   const apiKeyId = `key-memory-${Date.now()}`;
-  await createMemory({
-    apiKeyId,
-    sessionId: "session-1",
-    type: "factual",
-    key: "preference",
-    content: "User prefers concise Rust examples.",
-    metadata: {},
-    expiresAt: null,
+  setMemoryPipelineSettingsResolver((ownerId) => {
+    assert.equal(ownerId, apiKeyId);
+    return {
+      ...DEFAULT_MEMORY_PIPELINE_SETTINGS,
+      injectionEnabled: true,
+    };
+  });
+  setRecallProvider({
+    fetchL3: async () => [],
+    fetchL2: async () => [],
+    fetchL1: async ({ ownerId, sessionId, query }) => {
+      assert.equal(ownerId, apiKeyId);
+      assert.equal(sessionId, "shared");
+      assert.equal(query, "Give me a snippet.");
+      return [
+        {
+          id: "preference",
+          content: "User prefers concise Rust examples.",
+          score: 1,
+          tags: ["preference"],
+        },
+      ];
+    },
   });
 
   const { call } = await invokeChatCore({
@@ -585,24 +595,40 @@ test("chatCore injects memories when enabled and memories are found", async () =
   });
 
   assert.equal(call.body.messages[0].role, "system");
-  assert.match(
-    call.body.messages[0].content,
-    /Memory context: User prefers concise Rust examples\./
-  );
+  assert.match(call.body.messages[0].content, /MEMORY TOOLS GUIDE/);
   assert.equal(call.body.messages[1].role, "user");
+  assert.match(call.body.messages[1].content, /User prefers concise Rust examples\./);
+  assert.equal(call.body.messages[2].content, "Give me a snippet.");
 });
 
-test("chatCore skips memory injection when memory is disabled or apiKeyInfo is missing", async () => {
-  await settingsDb.updateSettings({
-    memoryEnabled: false,
-    memoryMaxTokens: 0,
-    memoryRetentionDays: 30,
-    memoryStrategy: "recent",
+test("chatCore skips four-layer injection when disabled or apiKeyInfo is missing", async () => {
+  let resolvedOwnerId = null;
+  let recallCalls = 0;
+  setMemoryPipelineSettingsResolver((ownerId) => {
+    resolvedOwnerId = ownerId;
+    return {
+      ...DEFAULT_MEMORY_PIPELINE_SETTINGS,
+      injectionEnabled: false,
+    };
   });
-  invalidateMemorySettingsCache();
+  setRecallProvider({
+    fetchL3: async () => {
+      recallCalls += 1;
+      return [];
+    },
+    fetchL2: async () => {
+      recallCalls += 1;
+      return [];
+    },
+    fetchL1: async () => {
+      recallCalls += 1;
+      return [];
+    },
+  });
 
+  const disabledKeyId = `key-disabled-${Date.now()}`;
   const disabled = await invokeChatCore({
-    apiKeyInfo: { id: `key-disabled-${Date.now()}`, name: "Disabled Key" },
+    apiKeyInfo: { id: disabledKeyId, name: "Disabled Key" },
     body: {
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: "Hello" }],
@@ -615,29 +641,38 @@ test("chatCore skips memory injection when memory is disabled or apiKeyInfo is m
     },
   });
 
+  assert.equal(resolvedOwnerId, disabledKeyId);
+  assert.equal(recallCalls, 0);
   assert.equal(disabled.call.body.messages[0].role, "user");
   assert.equal(disabled.call.body.messages[0].content, "Hello");
   assert.equal(noApiKey.call.body.messages[0].role, "user");
   assert.equal(noApiKey.call.body.messages[0].content, "Hello");
 });
 
-test("chatCore does not share or persist memories when apiKeyInfo is missing", async () => {
-  await settingsDb.updateSettings({
-    memoryEnabled: true,
-    memoryMaxTokens: 1024,
-    memoryRetentionDays: 30,
-    memoryStrategy: "recent",
+test("chatCore does not recall or capture memory when apiKeyInfo is missing", async () => {
+  let settingsCalls = 0;
+  let recallCalls = 0;
+  setMemoryPipelineSettingsResolver(() => {
+    settingsCalls += 1;
+    return {
+      ...DEFAULT_MEMORY_PIPELINE_SETTINGS,
+      captureEnabled: true,
+      injectionEnabled: true,
+    };
   });
-  invalidateMemorySettingsCache();
-
-  await createMemory({
-    apiKeyId: "local",
-    sessionId: "shared-local-session",
-    type: "factual",
-    key: "pref:theme",
-    content: "Shared local memory should stay isolated.",
-    metadata: {},
-    expiresAt: null,
+  setRecallProvider({
+    fetchL3: async () => {
+      recallCalls += 1;
+      return [{ id: "persona", title: "Persona", content: "Must stay owner-scoped." }];
+    },
+    fetchL2: async () => {
+      recallCalls += 1;
+      return [];
+    },
+    fetchL1: async () => {
+      recallCalls += 1;
+      return [];
+    },
   });
 
   const { call } = await invokeChatCore({
@@ -647,27 +682,38 @@ test("chatCore does not share or persist memories when apiKeyInfo is missing", a
     },
   });
 
-  await waitForAsyncMemoryFlush();
+  await new Promise((resolve) => setImmediate(resolve));
 
-  const localMemoriesResult = await listMemories({ apiKeyId: "local" });
-  const localMemories = Array.isArray(localMemoriesResult)
-    ? localMemoriesResult
-    : (localMemoriesResult.data ?? []);
-
+  assert.equal(settingsCalls, 0);
+  assert.equal(recallCalls, 0);
   assert.equal(call.body.messages[0].role, "user");
   assert.equal(call.body.messages[0].content, "I prefer blue themes.");
-  assert.equal(localMemories.length, 1);
-  assert.equal(localMemories[0].content, "Shared local memory should stay isolated.");
+  assert.equal(listMessages({ owner: ownerFromApiKeyId("local") }).length, 0);
 });
 
-test("chatCore skips memory injection when shouldInjectMemory returns false for empty message lists", async () => {
-  await settingsDb.updateSettings({
-    memoryEnabled: true,
-    memoryMaxTokens: 1024,
-    memoryRetentionDays: 30,
-    memoryStrategy: "recent",
+test("chatCore uses an empty query and injects only the tools guide for empty message lists", async () => {
+  let recallCalls = 0;
+  setMemoryPipelineSettingsResolver(() => ({
+    ...DEFAULT_MEMORY_PIPELINE_SETTINGS,
+    injectionEnabled: true,
+    l3CharBudget: 0,
+    l2CharBudget: 0,
+  }));
+  setRecallProvider({
+    fetchL3: async () => {
+      recallCalls += 1;
+      return [];
+    },
+    fetchL2: async () => {
+      recallCalls += 1;
+      return [];
+    },
+    fetchL1: async ({ query }) => {
+      recallCalls += 1;
+      assert.equal(query, "");
+      return [];
+    },
   });
-  invalidateMemorySettingsCache();
 
   const { call } = await invokeChatCore({
     apiKeyInfo: { id: `key-empty-${Date.now()}`, name: "Empty Key" },
@@ -677,17 +723,17 @@ test("chatCore skips memory injection when shouldInjectMemory returns false for 
     },
   });
 
-  assert.deepEqual(call.body.messages, []);
+  assert.equal(recallCalls, 3);
+  assert.equal(call.body.messages.length, 1);
+  assert.equal(call.body.messages[0].role, "system");
+  assert.match(call.body.messages[0].content, /MEMORY TOOLS GUIDE/);
 });
 
-test("chatCore extracts memories from Claude content arrays and Responses output_text payloads", async () => {
-  await settingsDb.updateSettings({
-    memoryEnabled: true,
-    memoryMaxTokens: 1024,
-    memoryRetentionDays: 30,
-    memoryStrategy: "recent",
-  });
-  invalidateMemorySettingsCache();
+test("chatCore L0 capture reads Claude content arrays and Responses output_text payloads", async () => {
+  setMemoryPipelineSettingsResolver(() => ({
+    ...DEFAULT_MEMORY_PIPELINE_SETTINGS,
+    captureEnabled: true,
+  }));
 
   const claudeKeyId = `key-claude-memory-${Date.now()}`;
   const claudeResult = await invokeChatCore({
@@ -726,7 +772,13 @@ test("chatCore extracts memories from Claude content arrays and Responses output
     apiKeyInfo: { id: responsesKeyId, name: "Responses Memory Key" },
     body: {
       model: "gpt-4o-mini",
-      input: "Remember this too.",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Remember this too." }],
+        },
+      ],
     },
     responseFactory: () =>
       new Response(
@@ -751,31 +803,30 @@ test("chatCore extracts memories from Claude content arrays and Responses output
 
   assert.equal(responsesResult.result.success, true);
 
-  await waitForAsyncMemoryFlush();
+  const claudeMessages = await waitForL0Messages(claudeKeyId, 2);
+  const responsesMessages = await waitForL0Messages(responsesKeyId, 2);
 
-  const claudeMemoriesResult = await listMemories({ apiKeyId: claudeKeyId });
-  const responsesMemoriesResult = await listMemories({ apiKeyId: responsesKeyId });
-  const claudeMemories = Array.isArray(claudeMemoriesResult)
-    ? claudeMemoriesResult
-    : (claudeMemoriesResult.data ?? []);
-  const responsesMemories = Array.isArray(responsesMemoriesResult)
-    ? responsesMemoriesResult
-    : (responsesMemoriesResult.data ?? []);
-
-  assert.equal(claudeMemories.length, 1);
-  assert.equal(claudeMemories[0].content, "strongly typed APIs");
-  assert.equal(responsesMemories.length, 1);
-  assert.equal(responsesMemories[0].content, "TypeScript for backend services");
+  assert.deepEqual(
+    claudeMessages.map(({ role, content }) => [role, content]),
+    [
+      ["user", "Remember this."],
+      ["assistant", "I like strongly typed APIs."],
+    ]
+  );
+  assert.deepEqual(
+    responsesMessages.map(({ role, content }) => [role, content]),
+    [
+      ["user", "Remember this too."],
+      ["assistant", "I prefer TypeScript for backend services."],
+    ]
+  );
 });
 
-test("chatCore request memory extraction for responses input ignores assistant items", async () => {
-  await settingsDb.updateSettings({
-    memoryEnabled: true,
-    memoryMaxTokens: 1024,
-    memoryRetentionDays: 30,
-    memoryStrategy: "recent",
-  });
-  invalidateMemorySettingsCache();
+test("chatCore L0 capture for Responses input ignores assistant items", async () => {
+  setMemoryPipelineSettingsResolver(() => ({
+    ...DEFAULT_MEMORY_PIPELINE_SETTINGS,
+    captureEnabled: true,
+  }));
 
   const responsesKeyId = `key-responses-request-memory-${Date.now()}`;
   const responsesResult = await invokeChatCore({
@@ -819,12 +870,12 @@ test("chatCore request memory extraction for responses input ignores assistant i
 
   assert.equal(responsesResult.result.success, true);
 
-  await waitForAsyncMemoryFlush();
+  const messages = await waitForL0Messages(responsesKeyId, 2);
 
-  const memoriesResult = await listMemories({ apiKeyId: responsesKeyId });
-  const memories = Array.isArray(memoriesResult) ? memoriesResult : (memoriesResult.data ?? []);
-
-  assert.equal(memories.length, 1);
-  assert.match(memories[0].content, /tea/i);
-  assert.doesNotMatch(memories[0].content, /coffee/i);
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].role, "user");
+  assert.match(messages[0].content, /tea/i);
+  assert.doesNotMatch(messages[0].content, /coffee/i);
+  assert.equal(messages[1].role, "assistant");
+  assert.equal(messages[1].content, "ok");
 });

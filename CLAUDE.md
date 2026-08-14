@@ -37,20 +37,20 @@ For full test matrix, see `CONTRIBUTING.md` → "Running Tests". For deep archit
 
 **OmniRoute** — unified AI proxy/router. One endpoint, 290 LLM providers, auto-fallback.
 
-| Layer         | Location                | Purpose                                                                                                                                                 |
-| ------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| API Routes    | `src/app/api/v1/`       | Next.js App Router — entry points                                                                                                                       |
-| Handlers      | `open-sse/handlers/`    | Request processing (chat, embeddings, etc)                                                                                                              |
-| Executors     | `open-sse/executors/`   | Provider-specific HTTP dispatch                                                                                                                         |
-| Translators   | `open-sse/translator/`  | Format conversion (OpenAI↔Claude↔Gemini)                                                                                                                |
-| Transformer   | `open-sse/transformer/` | Responses API ↔ Chat Completions                                                                                                                        |
-| Services      | `open-sse/services/`    | Combo routing, rate limits, caching, etc                                                                                                                |
-| Database      | `src/lib/db/`           | SQLite domain modules (130 migrations)                                                                                                                  |
-| Domain/Policy | `src/domain/`           | Policy engine, cost rules, fallback logic                                                                                                               |
-| MCP Server    | `open-sse/mcp-server/`  | 104 tools (42 base + memory/skill/agentSkill/pool/notion/obsidian/gamification/plugin modules), 3 transports (stdio / SSE / Streamable HTTP), 31 scopes |
-| A2A Server    | `src/lib/a2a/`          | JSON-RPC 2.0 agent protocol                                                                                                                             |
-| Skills        | `src/lib/skills/`       | Extensible skill framework                                                                                                                              |
-| Memory        | `src/lib/memory/`       | Persistent conversational memory                                                                                                                        |
+| Layer         | Location                | Purpose                                                                                                                                                                                                           |
+| ------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| API Routes    | `src/app/api/v1/`       | Next.js App Router — entry points                                                                                                                                                                                 |
+| Handlers      | `open-sse/handlers/`    | Request processing (chat, embeddings, etc)                                                                                                                                                                        |
+| Executors     | `open-sse/executors/`   | Provider-specific HTTP dispatch                                                                                                                                                                                   |
+| Translators   | `open-sse/translator/`  | Format conversion (OpenAI↔Claude↔Gemini)                                                                                                                                                                          |
+| Transformer   | `open-sse/transformer/` | Responses API ↔ Chat Completions                                                                                                                                                                                  |
+| Services      | `open-sse/services/`    | Combo routing, rate limits, caching, etc                                                                                                                                                                          |
+| Database      | `src/lib/db/`           | SQLite domain modules (130 migrations)                                                                                                                                                                            |
+| Domain/Policy | `src/domain/`           | Policy engine, cost rules, fallback logic                                                                                                                                                                         |
+| MCP Server    | `open-sse/mcp-server/`  | 104 tools (42 base + memory/skill/agentSkill/pool/notion/obsidian/gamification/plugin modules), 3 transports (stdio / SSE / Streamable HTTP), 31 scopes                                                           |
+| A2A Server    | `src/lib/a2a/`          | JSON-RPC 2.0 agent protocol                                                                                                                                                                                       |
+| Skills        | `src/lib/skills/`       | Extensible skill framework                                                                                                                                                                                        |
+| Memory        | `src/memory/`           | Four-layer memory (L0 raw / L1 typed / L2 navigation / L3 working) on a standalone `memory.db`; off by default, per-API-key capture/injection, no Redis/Qdrant/AI SDK. Fork-specific (not upstream contribution). |
 
 Monorepo: `src/` (Next.js 16 app), `open-sse/` (streaming engine workspace), `electron/` (desktop app), `tests/`, `bin/` (CLI entry point).
 
@@ -295,6 +295,8 @@ connection continue serving other models.
 5. Write tests in `tests/unit/`
 6. Document in `docs/frameworks/A2A-SERVER.md` skill table
 
+> **A2A preserved with memory capability removed (v4.0 four-layer hard cutover).** The A2A skill set above is **preserved** across the four-layer memory cutover (skill count and `metadata.totalSkills = 42` unchanged; `smart-routing` / `quota-management` / `provider-discovery` / `cost-analysis` / `health-report` still wired in `src/lib/a2a/taskExecution.ts::A2A_SKILL_HANDLERS`). What changed: the in-skill memory capability — i.e. each skill's internal LLM call no longer injects memory into its prompt, and the skill does not call `omniroute_memory_*` tools. Skills still read their own task context; they just do not consult the four-layer memory subsystem. See `docs/frameworks/A2A-SERVER.md` § Built-in skills.
+
 ### Adding a New Cloud Agent
 
 1. Create agent class in `src/lib/cloudAgent/agents/` extending `CloudAgentBase` (3 already exist: codex-cloud, devin, jules)
@@ -336,7 +338,7 @@ For any non-trivial change, read the matching deep-dive first:
 | Resilience (3 mechanisms)                     | `docs/architecture/RESILIENCE_GUIDE.md`                 |
 | Reasoning replay                              | `docs/routing/REASONING_REPLAY.md`                      |
 | Skills framework                              | `docs/frameworks/SKILLS.md`                             |
-| Memory system (FTS5 + Qdrant)                 | `docs/frameworks/MEMORY.md`                             |
+| Memory system (four-layer L0/L1/L2/L3)        | `docs/frameworks/MEMORY.md`                             |
 | Cloud agents                                  | `docs/frameworks/CLOUD_AGENT.md`                        |
 | Guardrails (PII / injection / vision)         | `docs/security/GUARDRAILS.md`                           |
 | Public upstream credentials (Gemini/etc.)     | `docs/security/PUBLIC_CREDS.md`                         |
@@ -469,7 +471,7 @@ own dedicated branch, and you MUST confirm the base branch with the operator bef
 
    **Never `ln -s` node_modules.** Turbopack rejects a symlink that resolves outside the
    project root, so `npm run dev` dies with a FATAL panic (`Symlink [project]/node_modules
-   is invalid, it points out of the filesystem root`) while typecheck, lint and the test
+is invalid, it points out of the filesystem root`) while typecheck, lint and the test
    runners all keep passing — the error names "filesystem root", not the worktree, so it
    reads like a Next/build bug and costs real time to trace (incident 2026-07-31, #9043).
 

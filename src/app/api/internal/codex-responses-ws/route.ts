@@ -11,13 +11,20 @@ import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
 import { checkAndRefreshToken } from "@/sse/services/tokenRefresh";
 import { resolveCodexWsModelInfo } from "./modelResolution";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
-import { formatMemoryContext } from "@/lib/memory/injection";
-import { retrieveMemories } from "@/lib/memory/retrieval";
 import {
-  DEFAULT_MEMORY_SETTINGS,
-  getMemorySettings,
-  toMemoryRetrievalConfig,
-} from "@/lib/memory/settings";
+  resolveMemoryPipelineSettings,
+  type MemoryPipelineSettings,
+} from "@/memory/integration/settings.ts";
+import {
+  recallLayeredContext,
+  type RecallFacadeOptions,
+  type RecallInput,
+  type RecallOutput,
+} from "@/memory/recall/facade.ts";
+import {
+  renderLayeredInjection,
+  resolveTotalBudget,
+} from "@/memory/integration/injectionTransformer.ts";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
 import { logger } from "@omniroute/open-sse/utils/logger.ts";
 import { resolveProxy } from "@omniroute/open-sse/utils/networkProxy.ts";
@@ -173,15 +180,49 @@ export function injectResponsesWsMemoryInstructions(
   };
 }
 
-async function getMemorySettingsForResponsesWs() {
-  try {
-    return await getMemorySettings();
-  } catch (error) {
-    log.warn("memory.settings.defaulted", {
-      error: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
-    });
-    return DEFAULT_MEMORY_SETTINGS;
-  }
+export interface ResponsesWsMemoryDeps {
+  resolveSettings(ownerId: string): Promise<MemoryPipelineSettings>;
+  recall(input: RecallInput, options: RecallFacadeOptions): Promise<RecallOutput>;
+}
+
+const DEFAULT_RESPONSES_WS_MEMORY_DEPS: ResponsesWsMemoryDeps = {
+  resolveSettings: resolveMemoryPipelineSettings,
+  recall: recallLayeredContext,
+};
+
+export async function injectResponsesWsLayeredMemory(
+  responseBody: JsonRecord,
+  ownerId: string,
+  deps: ResponsesWsMemoryDeps = DEFAULT_RESPONSES_WS_MEMORY_DEPS
+): Promise<JsonRecord> {
+  const settings = await deps.resolveSettings(ownerId);
+  if (!settings.injectionEnabled) return responseBody;
+
+  const query = extractResponsesWsMemoryQuery(responseBody);
+  if (!query) return responseBody;
+
+  const recall = await deps.recall(
+    { ownerId, sessionId: "shared", query },
+    { timeoutMs: settings.recallTimeoutMs }
+  );
+  const maxTokens =
+    typeof responseBody.max_output_tokens === "number" ? responseBody.max_output_tokens : undefined;
+  return renderLayeredInjection(
+    responseBody,
+    recall.layers,
+    {
+      l3CharBudget: settings.l3CharBudget,
+      l2CharBudget: settings.l2CharBudget,
+      l1CharBudget: settings.l1CharBudget,
+      totalCharBudget: resolveTotalBudget(maxTokens, settings.totalCharBudget),
+    },
+    {
+      provider: "codex",
+      sourceFormat: "openai-responses",
+      targetFormat: "openai-responses",
+      maxTokens,
+    }
+  ).body;
 }
 
 async function maybeInjectResponsesWsMemory(
@@ -190,17 +231,8 @@ async function maybeInjectResponsesWsMemory(
 ): Promise<JsonRecord> {
   if (!metadata?.id) return responseBody;
 
-  const query = extractResponsesWsMemoryQuery(responseBody);
-  if (!query) return responseBody;
-
   try {
-    const memorySettings = await getMemorySettingsForResponsesWs();
-    const memories = await retrieveMemories(
-      metadata.id,
-      toMemoryRetrievalConfig(memorySettings, { query })
-    );
-    const memoryText = formatMemoryContext(memories);
-    return injectResponsesWsMemoryInstructions(responseBody, memoryText);
+    return await injectResponsesWsLayeredMemory(responseBody, metadata.id);
   } catch (error) {
     log.warn("memory.injection.skipped", {
       error: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),

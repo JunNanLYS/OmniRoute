@@ -589,16 +589,6 @@ export {
 } from "./db/playgroundPresets";
 
 export type { PlaygroundPresetListItem } from "./db/playgroundPresets";
-// Plan 21 — Memory Engine Redesign
-export {
-  getMemoryVecMeta,
-  setMemoryVecMeta,
-  markMemoryNeedsReindex,
-  markAllMemoriesNeedReindex,
-  getMemoryReindexQueue,
-  countMemoryReindexPending,
-  type MemoryVecMeta,
-} from "./db/memoryVec";
 // T-A-F2: AgentBridge state/mappings/bypass + Inspector custom hosts/sessions
 export * from "./db/agentBridgeState";
 export * from "./db/agentBridgeMappings";

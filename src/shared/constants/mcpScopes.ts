@@ -25,6 +25,8 @@ export const MCP_SCOPE_LIST = [
   "read:compression",
   "write:compression",
   "read:proxies",
+  "read:memory",
+  "write:memory",
 ] as const;
 
 export type McpScope = (typeof MCP_SCOPE_LIST)[number];
@@ -81,4 +83,11 @@ export const MCP_TOOL_SCOPES: Record<string, readonly McpScope[]> = {
   omniroute_pool_warm: ["write:resilience"],
   // Stealth browser pool observability (#3368 PR7)
   omniroute_browser_pool_status: ["read:health"],
+
+  // Memory surface — read set is public; writes may be added later (write:memory).
+  omniroute_memory_l0_search: ["read:memory"],
+  omniroute_memory_l1_search: ["read:memory"],
+  omniroute_memory_l2_read: ["read:memory"],
+  omniroute_memory_l3_read: ["read:memory"],
+  omniroute_memory_list: ["read:memory"],
 } as const;

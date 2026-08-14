@@ -92,32 +92,72 @@ async function waitForDrain(): Promise<void> {
   });
 }
 
+interface StorageCleanupDeps {
+  stopDistillationWorker(): Promise<void>;
+  flushSpendBatchWriter(): Promise<{ flushedEntries: number }>;
+  closeAuditDb(): boolean;
+  closeMemoryDbInstance(): boolean;
+  closeDbInstance(): boolean;
+  closeLogRotation(): void;
+  logger: Pick<Console, "log" | "warn">;
+}
+
+export async function runStorageCleanup(deps: StorageCleanupDeps): Promise<void> {
+  try {
+    await deps.stopDistillationWorker();
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    deps.logger.warn("[Shutdown] Could not stop memory distillation worker:", message);
+  }
+
+  const flushResult = await deps.flushSpendBatchWriter();
+  if (flushResult.flushedEntries > 0) {
+    deps.logger.log(
+      `[Shutdown] Spend batch writer flushed ${flushResult.flushedEntries} pending entry(ies).`
+    );
+  }
+  if (deps.closeAuditDb()) {
+    deps.logger.log("[Shutdown] MCP audit database checkpointed and closed.");
+  }
+  if (deps.closeMemoryDbInstance()) {
+    deps.logger.log("[Shutdown] Memory database checkpointed and closed.");
+  }
+  if (deps.closeDbInstance()) {
+    deps.logger.log("[Shutdown] SQLite database checkpointed and closed.");
+  }
+  deps.closeLogRotation();
+  deps.logger.log("[Shutdown] Log rotation timer stopped.");
+}
+
 /**
  * Perform cleanup: close DB connections, flush logs.
  */
 async function cleanup(): Promise<void> {
   try {
-    const [{ closeAuditDb }, { closeDbInstance }, { flushSpendBatchWriter }, { closeLogRotation }] =
-      await Promise.all([
-        import("@omniroute/open-sse/mcp-server/audit.ts"),
-        import("@/lib/db/core"),
-        import("@/lib/spend/batchWriter"),
-        import("@/lib/logRotation"),
-      ]);
-    const flushResult = await flushSpendBatchWriter();
-    if (flushResult.flushedEntries > 0) {
-      console.log(
-        `[Shutdown] Spend batch writer flushed ${flushResult.flushedEntries} pending entry(ies).`
-      );
-    }
-    if (closeAuditDb()) {
-      console.log("[Shutdown] MCP audit database checkpointed and closed.");
-    }
-    if (closeDbInstance()) {
-      console.log("[Shutdown] SQLite database checkpointed and closed.");
-    }
-    closeLogRotation();
-    console.log("[Shutdown] Log rotation timer stopped.");
+    const [
+      { closeAuditDb },
+      { closeDbInstance },
+      { flushSpendBatchWriter },
+      { closeLogRotation },
+      { closeMemoryDbInstance },
+      { stopDistillationWorker },
+    ] = await Promise.all([
+      import("@omniroute/open-sse/mcp-server/audit.ts"),
+      import("@/lib/db/core"),
+      import("@/lib/spend/batchWriter"),
+      import("@/lib/logRotation"),
+      import("@/memory/db/core"),
+      import("@/memory/distillation/public"),
+    ]);
+    await runStorageCleanup({
+      stopDistillationWorker,
+      flushSpendBatchWriter,
+      closeAuditDb,
+      closeMemoryDbInstance,
+      closeDbInstance,
+      closeLogRotation,
+      logger: console,
+    });
 
     // Tear down any persistent VNC login browser containers so they don't leak
     // past the server process. Best-effort; no-op if the feature was never used

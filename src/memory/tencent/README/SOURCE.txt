@@ -1,0 +1,232 @@
+Source: TencentDB Agent Memory (https://github.com/your-org/tencentdb-agent-memory)
+Local mirror: D:/Project/TencentDB-Agent-Memory/
+Upstream commit: fe3230f ("Update package.json")
+License: MIT — Copyright (C) 2026 Tencent.
+
+File-by-file attribution
+========================
+
+Every `.ts` file in this subtree carries an `ADAPTED FROM TencentDB Agent
+Memory (MIT)` header pointing to the exact upstream path, the upstream
+commit, and the local modifications. The list below summarises what was
+adapted and what was changed.
+
+Prompt modules
+--------------
+
+* `src/prompts/l1-extraction.ts`
+  - Upstream: `MemoryCore/src/core/prompts/l1-extraction.ts`
+    (EXTRACT_MEMORIES_SYSTEM_PROMPT, EXTRACT_WORK_MEMORIES_SYSTEM_PROMPT,
+     getExtractMemoriesSystemPrompt, formatExtractionPrompt,
+     type MemoryPromptMode)
+  - Modifications:
+    - Prompt strings are verbatim.
+    - `ConversationMessage` upstream type replaced with local
+      `L1ExtractionMessage` (structurally compatible: id, role, content,
+      timestamp).
+
+* `src/prompts/l1-dedup.ts`
+  - Upstream: `MemoryCore/src/core/prompts/l1-dedup.ts`
+    (CONFLICT_DETECTION_SYSTEM_PROMPT, WORK_CONFLICT_DETECTION_SYSTEM_PROMPT,
+     getConflictDetectionSystemPrompt, formatBatchConflictPrompt,
+     CandidateMatch)
+  - Modifications:
+    - Prompt strings are verbatim.
+    - `MemoryRecord` / `ExtractedMemory` upstream types replaced with
+      local `DedupCandidateRecord` / `DedupCandidateMatch`.
+
+* `src/prompts/scene-extraction.ts`
+  - Upstream: `MemoryCore/src/core/prompts/scene-extraction.ts`
+    (buildSceneSystemPrompt, buildWorkSceneSystemPrompt,
+     getSceneSystemPrompt, buildSceneExtractionPrompt,
+     SceneExtractionPromptParams, SceneExtractionPromptResult)
+  - Modifications:
+    - Prompt strings are verbatim (file-tool-call instructions reframed as
+      "structured action output"; the LLM still produces a structured
+      response that the native worker persists).
+    - Output size cap (1500 chars/scene) preserved.
+
+* `src/prompts/persona-generation.ts`
+  - Upstream: `MemoryCore/src/core/prompts/persona-generation.ts`
+    (PERSONA_SYSTEM_PROMPT, TEAM_MEMORY_SYSTEM_PROMPT, buildPersonaPrompt,
+     PersonaPromptParams, PersonaPromptResult)
+  - Modifications:
+    - Prompt strings are verbatim (file-tool-call instructions reframed as
+      "structured content output").
+    - Caps (PERSONA_MAX_CHARS=2000, TEAM_DOCTRINE_MAX_CHARS=1200) are
+      surfaced as exported constants.
+
+* `src/prompts/offload-prompts.ts`
+  - Upstream: `MemoryCore/src/offload/local-llm/prompts/l1-prompt.ts`,
+              `MemoryCore/src/offload/local-llm/prompts/l15-prompt.ts`,
+              `MemoryCore/src/offload/local-llm/prompts/l2-prompt.ts`
+    (L1_SYSTEM_PROMPT, buildL1UserPrompt, L15_SYSTEM_PROMPT,
+     buildL15UserPrompt, L2_SYSTEM_PROMPT, buildL2UserPrompt,
+     PARAMS_MAX_LEN=500, RESULT_MAX_LEN=2000, COMPRESS_THRESHOLD=200,
+     L2_MMD_BUDGET_CHARS=4000)
+  - Modifications:
+    - All prompt strings verbatim.
+    - Defaults lifted into named constants
+      (L1_PARAMS_MAX_LEN, L1_RESULT_MAX_LEN, L1_COMPRESS_THRESHOLD,
+       L2_MMD_BUDGET_CHARS, L2_MMD_WARN_CHARS).
+
+Parser modules
+--------------
+
+* `src/parsers/json-utils.ts`
+  - Upstream: `MemoryCore/src/offload/local-llm/parsers/json-utils.ts`
+              `MemoryCore/src/offload_server/parsers/json-utils.ts`
+    (extractJson, extractMermaidFromFence, tryParse, fixTrailingCommas)
+  - Modifications: none functionally. A comment that referenced a
+    Chinese-only tool-call-id edge case was dropped (no behavioral effect).
+
+* `src/parsers/l1-offload-parser.ts`
+  - Upstream: `MemoryCore/src/offload/local-llm/parsers/l1-parser.ts`
+              `MemoryCore/src/offload_server/parsers/l1-parser.ts`
+    (parseL1Response)
+  - Modifications:
+    - Score clamping [0, 10] preserved (default 5).
+    - `seq` field from the offload_server variant was dropped (not used
+      by the native worker).
+
+* `src/parsers/l15-parser.ts`
+  - Upstream: `MemoryCore/src/offload_server/parsers/l15-parser.ts`
+    (parseL15Response, toBool, isSafeFilename)
+  - Modifications: none functionally.
+
+* `src/parsers/l2-offload-parser.ts`
+  - Upstream: `MemoryCore/src/offload_server/parsers/l2-parser.ts`
+    (parseL2Response)
+  - Modifications: none functionally.
+
+* `src/parsers/l1-dedup-parser.ts`
+  - Upstream: action-application pattern from
+    `MemoryCore/src/core/record/l1-dedup.ts`; action enum from the prompt
+    contract in `MemoryCore/src/core/prompts/l1-dedup.ts`.
+  - Modifications:
+    - Action enum (store|update|skip|merge) preserved verbatim.
+    - Priority coercion to integer [0, 100] added (the upstream writer
+      already coerens; this is a defensive parser-side guard).
+    - `merged_content` / `merged_type` / `merged_timestamps` are kept
+      optional for `merge` / `update` so partial LLM output does not
+      blow up the caller.
+
+* `src/parsers/scene-action-parser.ts`
+  - Upstream: action contract from `MemoryCore/src/core/prompts/scene-extraction.ts`
+    + the trace-parser pattern from `MemoryCore/src/core/scene/scene-extractor.ts`.
+  - Modifications:
+    - Tool-call layer skipped — actions are surfaced as structured
+      `SceneAction` records (UPDATE / MERGE / CREATE).
+    - `[DELETED]` marker constant preserved.
+    - Persona-update out-of-band marker preserved (`recoverPersonaUpdateRequest`).
+    - Filename validation rule preserved (no spaces / quotes / brackets /
+      slashes / colons / etc.; must end `.md` lowercase).
+    - Body truncation to `SCENE_BODY_MAX_CHARS=1500` by codepoint.
+
+Text utilities
+--------------
+
+* `src/text/sanitize.ts`
+  - Upstream: `MemoryCore/src/utils/sanitize.ts`
+    (sanitizeText, stripCodeBlocks, escapeXmlTags, shouldCaptureL0,
+     shouldExtractL1, looksLikePromptInjection, isFrameworkNoise,
+     sanitizeJsonForParse, escapeControlCharsInJsonStrings,
+     pickRecentUnique)
+  - Modifications:
+    - `sanitizeText` regex set is identical.
+    - `stripCodeBlocks` is identical.
+    - `escapeXmlTags` is identical.
+    - `shouldCaptureL0` / `shouldExtractL1` are identical except the
+      comment-only length filters (kept disabled in upstream) are kept
+      disabled here.
+    - `looksLikePromptInjection` pattern set is identical.
+    - `sanitizeJsonForParse` / `escapeControlCharsInJsonStrings` are
+      verbatim.
+    - Two helpers added that are *derived from* the upstream runtime
+      (not direct copy):
+        - `repairExtractionJson` — verbatim from
+          `MemoryCore/src/core/record/l1-extractor.ts::repairExtractionJson`.
+        - `parseExtractionScenes` — verbatim port of
+          `parseExtractionResult` in the same file, returning structured
+          scene segments suitable for in-memory / DB execution.
+
+* `src/text/chunking.ts`
+  - Upstream: `MemoryCore/src/core/skill/conversation-add/oversize-strategy.ts`
+    (applyOversizeStrategy, DEFAULT_OVERSIZE_OPTIONS, OversizeMessage,
+     OversizeOptions, OversizeResult)
+  - Modifications: none functionally. Type names shortened
+    (Oversize* → OversizeChunk*) to avoid collision with the OmniRoute
+    domain vocabulary. Defaults (chunkMaxBytes=81920, headKeepBytes=20480,
+    tailKeepBytes=20480) preserved.
+
+Recall utilities
+----------------
+
+* `src/recall/budget.ts`
+  - Upstream:
+      `MemoryCore/src/core/store/search-utils.ts` (RRF_K=60, rrfMerge)
+      `MemoryCore/src/core/hooks/auto-recall.ts`
+        (applyRecallBudget, normalizeBudgetLimit, truncateRecallLine,
+         RECALL_TRUNCATION_SUFFIX="…（已截断；可用 tdai_memory_search 或 tdai_conversation_search 查看详情）",
+         MIN_TRUNCATED_RECALL_LINE_CHARS=40,
+         RECALL_LINE_SEPARATOR="\n")
+  - Modifications:
+    - `rrfMerge` is generalized to any `getId` selector (upstream hard-codes
+      `record_id`); default k=60 unchanged.
+    - `applyRecallBudget` exposes `truncatedCount` + `droppedCount` so the
+      caller can log/report without re-deriving.
+    - `deriveTotalRecallBudget` is a new convenience helper that mirrors
+      the upstream "600 chars/memory, derived total" comment.
+
+* `src/recall/memory-tools-guide.ts`
+  - Upstream:
+      `MemoryCore/src/core/hooks/auto-recall.ts::MEMORY_TOOLS_GUIDE`
+  - Modifications:
+    - Guide block text is verbatim (Chinese descriptions preserved).
+    - Tool names exposed as constants (TOOL_MEMORY_SEARCH,
+      TOOL_CONVERSATION_SEARCH, TOOL_READ_FILE) so callers can check the
+      budget without string-comparing.
+    - `MemoryToolCallBudget` is a new helper that tracks the per-turn
+      `≤3 calls` semantic — the upstream logic was inlined in the hook
+      body; here it is exposed as a pure class.
+
+Scheduling
+----------
+
+* `src/scheduling/pipeline.ts`
+  - Upstream:
+      `MemoryCore/src/utils/checkpoint.ts`
+        (PipelineSessionState, warmup_threshold doubling ladder)
+      `MemoryCore/src/core/state/types.ts`
+      warmup semantics from `MemoryCore/src/core/store/embedding.ts`
+  - Modifications:
+    - `advanceWarmup` exposes the doubling ladder (1 → 2 → 4 → 8 → ... →
+      everyN) as pure logic. 0 = saturated.
+    - `shouldTriggerL1` / `shouldTriggerL2` use the same ladder
+      comparison.
+    - `shouldTriggerL3` reasons about both the scene-count signal and the
+      memories-since-last-persona signal — these are derived from the
+      upstream Checkpoint fields (`last_persona_at`, `scenes_processed`,
+      `memories_since_last_persona`) but the upstream itself uses ad-hoc
+      inline checks in different places. The reasoning is brought
+      together here.
+
+Public surface
+--------------
+
+* `src/index.ts`
+  - Local barrel re-export. No upstream equivalent.
+
+Source commit / repo evidence
+=============================
+
+TencentDB-Agent-Memory repo commit on disk:
+    $ git -C D:/Project/TencentDB-Agent-Memory log --oneline -1
+    fe3230f Update package.json
+
+LICENSE file on disk:
+    $ head D:/Project/TencentDB-Agent-Memory/LICENSE
+    Tencent is pleased to support the open source community by making
+    TencentDB Agent Memory available.
+    Copyright (C) 2026 Tencent.  All rights reserved.
+    TencentDB Agent Memory is licensed under the MIT.

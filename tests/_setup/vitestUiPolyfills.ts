@@ -22,6 +22,10 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
   };
 }
 
+if (typeof Element !== "undefined" && typeof Element.prototype.scrollIntoView !== "function") {
+  Element.prototype.scrollIntoView = () => {};
+}
+
 // #7935 wired `useTranslations`/`useLocale` (next-intl) into ~180 dashboard/shared
 // components (Button, Modal, Select, EmptyState, ProviderIcon, ...). Any UI test that
 // mounts a component depending on one of those — directly or transitively — without its
