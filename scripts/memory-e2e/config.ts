@@ -2,14 +2,26 @@
  * Profile configuration for the memory E2E harness.
  *
  * smoke: loopback mock upstream, zero external cost, structural assertions.
- * live:  real upstream (DeepSeek by default), judged semantic scoring —
- *        implemented in a later stage; resolving the profile fails fast here
- *        so an accidental `--profile live` cannot half-run.
+ * live:  real upstream (DeepSeek via MEMORY_E2E_DEEPSEEK_API_KEY) with judged
+ *        semantic scoring; the smoke gate always runs first so infrastructure
+ *        failures are not misreported as memory-quality failures. Live spend
+ *        is capped through per-key USD limits (MEMORY_E2E_LIVE_MAX_USD,
+ *        default 5).
  */
 export type MemoryE2eProfile = "smoke" | "live";
 
+export interface MemoryE2eLiveConfig {
+  /** Real upstream API key (env MEMORY_E2E_DEEPSEEK_API_KEY) — never reported. */
+  providerApiKey: string;
+  /** Optional model override; default is discovered from the live sync response. */
+  modelOverride?: string;
+  /** Per-run USD ceiling enforced through per-key usage limits. Default 5. */
+  maxUsd: number;
+}
+
 export interface MemoryE2eConfig {
   profile: MemoryE2eProfile;
+  live?: MemoryE2eLiveConfig;
   fixturesDir: string;
   reportRoot: string;
   /** Boot budget for the isolated dev server. */
@@ -36,7 +48,10 @@ export const DEFAULTS = {
   runDeadlineMs: 600_000,
 } as const;
 
-export function resolveMemoryE2eConfig(argv: readonly string[]): MemoryE2eConfig {
+export function resolveMemoryE2eConfig(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env
+): MemoryE2eConfig {
   const args = new Set(argv.filter((arg) => arg.startsWith("--")).map((arg) => arg.split("=")[0]!));
   const valueOf = (name: string): string | undefined => {
     const inline = argv.find((arg) => arg.startsWith(`--${name}=`));
@@ -49,14 +64,26 @@ export function resolveMemoryE2eConfig(argv: readonly string[]): MemoryE2eConfig
   if (profile !== "smoke" && profile !== "live") {
     throw new Error(`--profile must be "smoke" or "live" (got "${profile}")`);
   }
+
+  let live: MemoryE2eLiveConfig | undefined;
   if (profile === "live") {
-    throw new Error(
-      "live profile is not implemented yet (stage 4: real upstream + judge). Use --profile smoke."
-    );
+    const providerApiKey = env.MEMORY_E2E_DEEPSEEK_API_KEY?.trim();
+    if (!providerApiKey) {
+      throw new Error(
+        "live profile requires MEMORY_E2E_DEEPSEEK_API_KEY (set it in the environment; the key is never written to reports)"
+      );
+    }
+    const maxUsdRaw = Number(env.MEMORY_E2E_LIVE_MAX_USD ?? "");
+    live = {
+      providerApiKey,
+      modelOverride: env.MEMORY_E2E_LIVE_MODEL?.trim() || undefined,
+      maxUsd: Number.isFinite(maxUsdRaw) && maxUsdRaw > 0 ? maxUsdRaw : 5,
+    };
   }
 
   return {
     profile,
+    live,
     fixturesDir: valueOf("fixtures-dir") ?? DEFAULTS.fixturesDir,
     reportRoot: valueOf("report-root") ?? DEFAULTS.reportRoot,
     serverWaitMs: Number(valueOf("server-wait-ms") ?? DEFAULTS.serverWaitMs),

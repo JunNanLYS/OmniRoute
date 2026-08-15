@@ -2,13 +2,15 @@
  * Memory E2E harness entry point.
  *
  *   node --import tsx/esm scripts/memory-e2e/run.ts --profile smoke
+ *   node --import tsx/esm scripts/memory-e2e/run.ts --profile live   # real tokens
  *
- * Owns the full isolated lifecycle per the design doc: loopback mock upstream,
- * dedicated OmniRoute server (temp DATA_DIR + free port), product-API seeding,
- * per-fixture L0 import → real gateway turn → L0 gate → explicit distillation
- * run → structural layer assertions, then a masked report under
- * test-results/memory-e2e/<run-id>/. Exit code 0 only when every fixture
- * passes.
+ * Owns the full isolated lifecycle per the design doc: loopback mock upstream
+ * (smoke) or a real provider connection (live), dedicated OmniRoute server
+ * (temp DATA_DIR + free port), product-API seeding, per-fixture L0 import →
+ * real gateway turn → L0 gate → explicit distillation run → structural layer
+ * assertions, then — live only — judged semantic scoring with threshold
+ * evaluation, and a masked report under test-results/memory-e2e/<run-id>/.
+ * Exit code 0 only when every fixture passes (and, on live, thresholds hold).
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -19,7 +21,7 @@ import { pathToFileURL } from "node:url";
 import { resolveMemoryE2eConfig, type MemoryE2eConfig } from "./config.ts";
 import { startOmniRouteServer, type ServerHandle } from "./server.ts";
 import { MemoryMockUpstream } from "./mockUpstream.ts";
-import { maskedSeedSummary, seedSmokeTarget, type SeedResult } from "./seed.ts";
+import { maskedSeedSummary, seedLiveTarget, seedSmokeTarget, type SeedResult } from "./seed.ts";
 import { importFixtureHistory } from "./l0Import.ts";
 import { sendFinalUserTurn } from "./gateway.ts";
 import { runExplicitDistillation } from "./distillation.ts";
@@ -28,9 +30,12 @@ import { loadFixtures, type MemoryE2eFixture } from "./types.ts";
 import {
   writeReportFiles,
   type FixtureResult,
+  type FixtureJudgeSummary,
   type FailureStage,
+  type LiveSummary,
   type ReportMeta,
 } from "./report.ts";
+import { evaluateEvaluationThresholds, runJudge, type JudgeVerdict } from "./judge.ts";
 import { httpJson, pollUntil } from "./http.ts";
 
 interface HarnessContext {
@@ -97,12 +102,14 @@ async function executeFixture(
     l2Count: 0,
     l3Count: 0,
     durationMs: 0,
+    judge: null,
   };
   const finish = (
     status: "pass" | "fail",
     stage: FailureStage | null,
     failures: string[],
-    counts?: Partial<Pick<FixtureResult, "l0RowCount" | "l1Count" | "l2Count" | "l3Count">>
+    counts?: Partial<Pick<FixtureResult, "l0RowCount" | "l1Count" | "l2Count" | "l3Count">>,
+    judge: FixtureJudgeSummary | null = null
   ): FixtureResult => ({
     ...base,
     ...counts,
@@ -110,6 +117,7 @@ async function executeFixture(
     stage,
     failures,
     durationMs: Date.now() - startedAt,
+    judge,
   });
 
   try {
@@ -208,13 +216,17 @@ async function executeFixture(
     }
 
     // Stage 5 — structural layer assertions (semantic judging is live-only).
-    const l2Rows = await listMemory<{ id: string }>(server.baseUrl, subject.key, "l2");
+    const l2Rows = await listMemory<{ id: string; summary: string }>(
+      server.baseUrl,
+      subject.key,
+      "l2"
+    );
     const l3Rows = await listMemory<{ id: string; content: string }>(
       server.baseUrl,
       subject.key,
       "l3"
     );
-    const finalL1 = await listMemory<{ sourceMessageIds: string[] }>(
+    const finalL1 = await listMemory<{ sourceMessageIds: string[]; content: string }>(
       server.baseUrl,
       subject.key,
       "l1"
@@ -250,6 +262,42 @@ async function executeFixture(
       l3Count: l3Rows.length,
     };
     if (structureFailures.length > 0) return finish("fail", "structure", structureFailures, counts);
+
+    // Stage 6 (live only) — judged semantic scoring. The structural gate must
+    // pass first so infrastructure failures are never misreported as
+    // memory-quality failures. A judge parse/validation failure is terminal
+    // for the fixture (no silent retry, per the design doc).
+    if (config.profile === "live") {
+      let verdict: JudgeVerdict;
+      try {
+        verdict = await runJudge({
+          baseUrl: server.baseUrl,
+          judgeKey: seed.judgeKey,
+          model: seed.gatewayModel,
+          input: {
+            fixtureId: fixture.id,
+            title: fixture.title,
+            transcript: rows.map((row) => `${row.role}: ${row.content}`).join("\n"),
+            l1Memories: finalL1.map((memory) => memory.content),
+            l2Scenes: l2Rows.map((scene) => `${scene.id} ${scene.summary}`.trim()),
+            l3Persona: l3Rows[0]?.content ?? "",
+            mandatoryPoints: fixture.mandatoryPoints,
+            negativePoints: fixture.negativePoints,
+            rubrics: fixture.rubrics,
+          },
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        return finish("fail", "judge", [`judge evaluation failed: ${message}`], counts);
+      }
+      return finish("pass", null, [], counts, {
+        scores: verdict.scores,
+        mandatoryPointScores: verdict.mandatoryPointScores,
+        negativeViolations: verdict.negativeViolations,
+        hallucination: verdict.hallucination,
+        rationale: verdict.rationale,
+      });
+    }
     return finish("pass", null, [], counts);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -298,10 +346,14 @@ export async function runHarness(): Promise<number> {
   let server: ServerHandle | null = null;
   let seed: SeedResult | null = null;
   const results: FixtureResult[] = [];
+  let liveSummary: LiveSummary | null = null;
 
   try {
-    const mockBaseUrl = await mock.start();
-    process.stdout.write(`[memory-e2e] mock upstream at ${mockBaseUrl}\n`);
+    let mockBaseUrl: string | null = null;
+    if (config.profile === "smoke") {
+      mockBaseUrl = await mock.start();
+      process.stdout.write(`[memory-e2e] mock upstream at ${mockBaseUrl}\n`);
+    }
 
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-memory-e2e-"));
     const { getFreePort } = await import("./http.ts");
@@ -314,7 +366,10 @@ export async function runHarness(): Promise<number> {
     });
     process.stdout.write(`[memory-e2e] server at ${server.baseUrl} (data ${dataDir})\n`);
 
-    seed = await seedSmokeTarget({ baseUrl: server.baseUrl, mockBaseUrl });
+    seed =
+      config.profile === "live" && config.live
+        ? await seedLiveTarget({ baseUrl: server.baseUrl, live: config.live })
+        : await seedSmokeTarget({ baseUrl: server.baseUrl, mockBaseUrl: mockBaseUrl! });
     process.stdout.write(`[memory-e2e] seed complete: model ${seed.gatewayModel}\n`);
 
     const fixtures = await loadFixtures(
@@ -327,6 +382,46 @@ export async function runHarness(): Promise<number> {
       results.push(result);
       process.stdout.write(
         `[memory-e2e] fixture ${fixture.id}: ${result.status.toUpperCase()}${result.failures.length ? ` — ${result.failures[0]}` : ""}\n`
+      );
+    }
+
+    // Live summary — must run while the server is still up (usage analytics).
+    if (config.profile === "live" && server && seed) {
+      const judged = results
+        .filter((result) => result.judge)
+        .map((result) => ({
+          fixtureId: result.fixtureId,
+          verdict: {
+            scores: result.judge!.scores,
+            mandatoryPointScores: result.judge!.mandatoryPointScores,
+            negativeViolations: result.judge!.negativeViolations,
+            hallucination: result.judge!.hallucination,
+            rationale: result.judge!.rationale,
+            evidence: [],
+          },
+        }));
+      const thresholds = evaluateEvaluationThresholds(judged);
+      let usage: LiveSummary["usage"] = null;
+      try {
+        const analytics = await httpJson<{
+          summary?: { totalTokens?: number; totalCost?: number };
+        }>(`${server.baseUrl}/api/usage/analytics`, { bearer: seed.managementKey });
+        usage = {
+          totalTokens: analytics.body.summary?.totalTokens ?? null,
+          totalCostUsd: analytics.body.summary?.totalCost ?? null,
+        };
+      } catch {
+        // Usage analytics are best-effort for the report.
+      }
+      // Judge and distillation share the discovered model in this design.
+      liveSummary = {
+        judgeModel: seed.gatewayModel,
+        selfPreferenceBias: true,
+        thresholds,
+        usage,
+      };
+      process.stdout.write(
+        `[memory-e2e] thresholds: ${thresholds.passed ? "PASS" : "FAIL"}${thresholds.violations.length ? ` — ${thresholds.violations[0]}` : ""}\n`
       );
     }
   } catch (error: unknown) {
@@ -344,6 +439,7 @@ export async function runHarness(): Promise<number> {
         l2Count: 0,
         l3Count: 0,
         durationMs: 0,
+        judge: null,
       });
     }
   } finally {
@@ -351,6 +447,8 @@ export async function runHarness(): Promise<number> {
     await mock.stop();
   }
 
+  // Live-summary computation happens inside the try block above (the usage
+  // analytics call needs the server alive); this space intentionally blank.
   const finishedAt = new Date().toISOString();
   const meta: ReportMeta = {
     runId,
@@ -359,6 +457,7 @@ export async function runHarness(): Promise<number> {
     finishedAt,
     gatewayModel: seed?.gatewayModel ?? "n/a",
     fixturesDir: config.fixturesDir,
+    liveSummary,
   };
   writeReportFiles({
     reportDir,
@@ -373,5 +472,6 @@ export async function runHarness(): Promise<number> {
   process.stdout.write(
     `[memory-e2e] ${passed}/${results.length} fixtures passed — report: ${reportDir}\n`
   );
-  return passed === results.length && results.length > 0 ? 0 : 1;
+  const structuralPass = passed === results.length && results.length > 0;
+  return structuralPass && (!liveSummary || liveSummary.thresholds.passed) ? 0 : 1;
 }

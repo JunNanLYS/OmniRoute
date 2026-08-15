@@ -7,7 +7,17 @@ import fs from "node:fs";
 import path from "node:path";
 
 export type FixtureStatus = "pass" | "fail";
-export type FailureStage = "seed" | "l0-import" | "gateway" | "distillation" | "gate" | "structure";
+export type FailureStage =
+  "seed" | "l0-import" | "gateway" | "distillation" | "gate" | "structure" | "judge";
+
+/** Live-profile judge summary attached to a fixture result. */
+export interface FixtureJudgeSummary {
+  scores: { l1: number; l2: number; l3: number };
+  mandatoryPointScores: number[];
+  negativeViolations: string[];
+  hallucination: boolean;
+  rationale: string;
+}
 
 export interface FixtureResult {
   fixtureId: string;
@@ -21,6 +31,22 @@ export interface FixtureResult {
   l2Count: number;
   l3Count: number;
   durationMs: number;
+  /** Present on live runs whose structural gate passed. */
+  judge: FixtureJudgeSummary | null;
+}
+
+export interface LiveSummary {
+  judgeModel: string;
+  /** Judge and distillation share the model — self-preference bias possible. */
+  selfPreferenceBias: boolean;
+  thresholds: {
+    passed: boolean;
+    violations: string[];
+    overallMean: number;
+    layerMeans: { l1: number; l2: number; l3: number };
+  };
+  /** Per-run token/cost totals from the usage analytics API (null if unavailable). */
+  usage: { totalTokens: number | null; totalCostUsd: number | null } | null;
 }
 
 export interface ReportMeta {
@@ -30,6 +56,8 @@ export interface ReportMeta {
   finishedAt: string;
   gatewayModel: string;
   fixturesDir: string;
+  /** Present on live runs. */
+  liveSummary?: LiveSummary | null;
 }
 
 export function buildReportJson(
@@ -45,6 +73,7 @@ export function buildReportJson(
     gatewayModel: meta.gatewayModel,
     overall: passed === results.length && results.length > 0 ? "PASS" : "FAIL",
     totals: { total: results.length, passed, failed: results.length - passed },
+    ...(meta.liveSummary ? { live: meta.liveSummary } : {}),
     results,
   };
 }
@@ -71,6 +100,43 @@ export function buildReportMarkdown(meta: ReportMeta, results: FixtureResult[]):
     );
   }
   const failed = results.filter((result) => result.status === "fail");
+  const judged = results.filter((result) => result.judge);
+  if (judged.length > 0) {
+    lines.push("");
+    lines.push(`## 语义评分（judge）`);
+    lines.push("");
+    lines.push(`| Suite | L1 | L2 | L3 | 必要点最低分 | 幻觉 |`);
+    lines.push(`| ----- | -- | -- | -- | ----------- | ---- |`);
+    for (const result of judged) {
+      const judge = result.judge!;
+      const minPoint = judge.mandatoryPointScores.length
+        ? Math.min(...judge.mandatoryPointScores)
+        : "-";
+      lines.push(
+        `| ${result.fixtureId} | ${judge.scores.l1} | ${judge.scores.l2} | ${judge.scores.l3} | ${minPoint} | ${judge.hallucination ? "⚠️" : "无"} |`
+      );
+    }
+    const live = meta.liveSummary;
+    if (live) {
+      lines.push("");
+      lines.push(
+        `- 阈值: **${live.thresholds.passed ? "PASS" : "FAIL"}**（总分均值 ${live.thresholds.overallMean.toFixed(2)}，分层 ${live.thresholds.layerMeans.l1.toFixed(2)}/${live.thresholds.layerMeans.l2.toFixed(2)}/${live.thresholds.layerMeans.l3.toFixed(2)}，要求 ≥4.5，每必要点 ≥4，幻觉一票否决）`
+      );
+      for (const violation of live.thresholds.violations) {
+        lines.push(`  - ${violation}`);
+      }
+      lines.push(`- Judge 模型: ${live.judgeModel}`);
+      if (live.selfPreferenceBias) {
+        lines.push(`- ⚠️ Judge 与蒸馏模型相同（self-preference bias 可能，分数宜作相对回归比较）`);
+      }
+      if (live.usage) {
+        lines.push(
+          `- 用量: tokens=${live.usage.totalTokens ?? "n/a"}, cost=$${live.usage.totalCostUsd ?? "n/a"}`
+        );
+      }
+      lines.push(`- 注：蒸馏调用使用上游默认温度；仅 judge 与网关终轮温度为 0。`);
+    }
+  }
   if (failed.length > 0) {
     lines.push("");
     lines.push(`## Failures`);

@@ -236,6 +236,131 @@ test("mock L1 splits long conversations into two distinct scenes", async () => {
   assert.ok(scenes[1]!.memories.some((memory) => memory.content.includes("报表重构")));
 });
 
+// ── Live profile config ──────────────────────────────────────────────────────
+
+test("live profile resolves from env and fails fast without a provider key", async () => {
+  const { resolveMemoryE2eConfig } = await import("../../scripts/memory-e2e/config.ts");
+
+  assert.throws(
+    () => resolveMemoryE2eConfig(["--profile", "live"], {}),
+    /MEMORY_E2E_DEEPSEEK_API_KEY/
+  );
+
+  const configured = resolveMemoryE2eConfig(["--profile", "live"], {
+    MEMORY_E2E_DEEPSEEK_API_KEY: "sk-live-test",
+  });
+  assert.equal(configured.profile, "live");
+  assert.ok(configured.live);
+  assert.equal(configured.live?.providerApiKey, "sk-live-test");
+  assert.equal(configured.live?.maxUsd, 5);
+  assert.equal(configured.live?.modelOverride, undefined);
+
+  const overridden = resolveMemoryE2eConfig(["--profile", "live"], {
+    MEMORY_E2E_DEEPSEEK_API_KEY: "sk-live-test",
+    MEMORY_E2E_LIVE_MODEL: "deepseek-v4-flash",
+    MEMORY_E2E_LIVE_MAX_USD: "2.5",
+  });
+  assert.equal(overridden.live?.modelOverride, "deepseek-v4-flash");
+  assert.equal(overridden.live?.maxUsd, 2.5);
+});
+
+// ── Judge prompt + strict verdict parsing ────────────────────────────────────
+
+test("judge messages embed transcript, memories, points, rubrics, and strict JSON contract", async () => {
+  const judge = await import("../../scripts/memory-e2e/judge.ts");
+  const messages = judge.buildJudgeMessages({
+    fixtureId: "01",
+    title: "工程协作偏好",
+    transcript: "user: 新服务用 TypeScript。\nassistant: 已记录。",
+    l1Memories: ["团队约定：新服务统一使用 TypeScript。"],
+    l2Scenes: ["工程协作：TypeScript strict、pnpm、Nx。"],
+    l3Persona: "偏好 TypeScript 生态的工程师。",
+    mandatoryPoints: ["新服务统一使用 TypeScript", "包管理器为 pnpm"],
+    negativePoints: ["yarn 迁移方案只是备选"],
+    rubrics: { l1: "L1 应包含偏好", l2: "L2 应聚合场景", l3: "L3 应内化人设" },
+  });
+  assert.ok(messages.length >= 2);
+  assert.equal(messages[0]?.role, "system");
+  const serialized = JSON.stringify(messages);
+  assert.ok(serialized.includes("json"));
+  assert.ok(serialized.includes("TypeScript"));
+  assert.ok(serialized.includes("新服务统一使用 TypeScript"));
+  assert.ok(serialized.includes("yarn 迁移方案只是备选"));
+  assert.ok(serialized.includes("L1 应包含偏好"));
+  assert.ok(serialized.includes("工程协作：TypeScript strict"));
+  assert.ok(serialized.includes("偏好 TypeScript 生态的工程师"));
+});
+
+test("parseJudgeVerdict accepts strict JSON and rejects malformed verdicts", async () => {
+  const judge = await import("../../scripts/memory-e2e/judge.ts");
+  const valid = JSON.stringify({
+    scores: { l1: 5, l2: 4, l3: 4 },
+    mandatoryPointScores: [5, 4],
+    negativeViolations: [],
+    hallucination: false,
+    rationale: "覆盖完整",
+    evidence: ["L1 含 TypeScript 事实"],
+  });
+  const parsed = judge.parseJudgeVerdict(valid, 2);
+  assert.equal(parsed.ok, true);
+  if (parsed.ok) {
+    assert.equal(parsed.verdict.scores.l1, 5);
+    assert.equal(parsed.verdict.mandatoryPointScores.length, 2);
+  }
+
+  // Tolerates a fenced json block (upstreams sometimes wrap), still strict on schema.
+  const fenced = "```json\n" + valid + "\n```";
+  assert.equal(judge.parseJudgeVerdict(fenced, 2).ok, true);
+
+  assert.equal(judge.parseJudgeVerdict("这不是 JSON", 2).ok, false);
+  assert.equal(judge.parseJudgeVerdict(JSON.stringify({ scores: { l1: 5 } }), 2).ok, false);
+  const outOfRange = JSON.stringify({
+    scores: { l1: 9, l2: 4, l3: 4 },
+    mandatoryPointScores: [5, 4],
+    negativeViolations: [],
+    hallucination: false,
+    rationale: "r",
+    evidence: [],
+  });
+  assert.equal(judge.parseJudgeVerdict(outOfRange, 2).ok, false);
+  assert.equal(judge.parseJudgeVerdict(valid, 3).ok, false, "point-count mismatch must fail");
+});
+
+test("threshold evaluation applies mean, per-point, and veto rules", async () => {
+  const judge = await import("../../scripts/memory-e2e/judge.ts");
+  const verdict = (l1: number, points: number[], hallucination = false) => ({
+    scores: { l1, l2: 5, l3: 5 },
+    mandatoryPointScores: points,
+    negativeViolations: [],
+    hallucination,
+    rationale: "",
+    evidence: [],
+  });
+  const passing = judge.evaluateEvaluationThresholds([
+    { fixtureId: "01", verdict: verdict(5, [5, 5]) },
+    { fixtureId: "02", verdict: verdict(4, [4, 5]) },
+  ]);
+  assert.equal(passing.passed, true, passing.violations.join(";"));
+
+  const lowMean = judge.evaluateEvaluationThresholds([
+    { fixtureId: "01", verdict: verdict(2, [5, 5]) },
+  ]);
+  assert.equal(lowMean.passed, false);
+  assert.ok(lowMean.violations.some((v) => v.includes("mean")));
+
+  const lowPoint = judge.evaluateEvaluationThresholds([
+    { fixtureId: "01", verdict: verdict(5, [5, 3]) },
+  ]);
+  assert.equal(lowPoint.passed, false);
+  assert.ok(lowPoint.violations.some((v) => v.includes("mandatory")));
+
+  const hallucinated = judge.evaluateEvaluationThresholds([
+    { fixtureId: "01", verdict: verdict(5, [5, 5], true) },
+  ]);
+  assert.equal(hallucinated.passed, false);
+  assert.ok(hallucinated.violations.some((v) => v.includes("hallucination")));
+});
+
 // ── Subject key factory (per-fixture owner isolation) ────────────────────────
 
 test("createSubjectKey mints an isolated owner with capture enabled per call", async () => {

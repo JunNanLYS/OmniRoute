@@ -12,8 +12,10 @@
  */
 import { httpJson, sleep } from "./http.ts";
 import { MOCK_MODEL_ID } from "./mockUpstream.ts";
+import type { MemoryE2eLiveConfig } from "./config.ts";
 
 export const MOCK_NODE_PREFIX = "mock";
+export const LIVE_PROVIDER_ID = "deepseek";
 
 export interface SeededKey {
   id: string;
@@ -59,11 +61,11 @@ async function createKey(
   baseUrl: string,
   name: string,
   log: string[],
-  scopes?: string[]
+  extraBody: Record<string, unknown> = {}
 ): Promise<SeededKey> {
   const response = await httpJson<{ key?: string; id?: string }>(`${baseUrl}/api/keys`, {
     method: "POST",
-    body: JSON.stringify({ name, ...(scopes ? { scopes } : {}) }),
+    body: JSON.stringify({ name, ...extraBody }),
   });
   if (!response.ok || !response.body.key || !response.body.id) {
     throw new Error(
@@ -76,14 +78,23 @@ async function createKey(
 
 /**
  * Mint one subject key and enable memory capture + injection on it. Used
- * per fixture so each suite distills into its own owner partition.
+ * per fixture so each suite distills into its own owner partition. Live runs
+ * may attach a per-key USD ceiling as a cost guard.
  */
 export async function createSubjectKey(
   baseUrl: string,
   name: string,
-  log: string[]
+  log: string[],
+  options: { usageLimitUsd?: number } = {}
 ): Promise<SeededKey> {
-  const subject = await createKey(baseUrl, name, log);
+  const subject = await createKey(
+    baseUrl,
+    name,
+    log,
+    options.usageLimitUsd
+      ? { usageLimitEnabled: true, dailyUsageLimitUsd: options.usageLimitUsd }
+      : {}
+  );
   const pipelinePut = await httpJson(`${baseUrl}/api/memory/pipeline-settings`, {
     method: "PUT",
     bearer: subject.key,
@@ -151,7 +162,9 @@ export async function seedSmokeTarget(options: {
   push(`created provider connection ${connectionId}`);
 
   // 2. Management key for the memory management surface.
-  const management = await createKey(baseUrl, "memory-e2e-management", log, ["manage"]);
+  const management = await createKey(baseUrl, "memory-e2e-management", log, {
+    scopes: ["manage"],
+  });
 
   // 3. Sync models from the mock upstream. The successful response is the
   //    authoritative sync contract (`models`, `syncedModels`, counts); the
@@ -225,6 +238,116 @@ export async function seedSmokeTarget(options: {
     createSubject,
     selectorModel: `${MOCK_NODE_PREFIX}/${MOCK_MODEL_ID}`,
     gatewayModel: `${MOCK_NODE_PREFIX}/${MOCK_MODEL_ID}`,
+    log,
+  };
+}
+
+/**
+ * Seeding for the live profile: a real DeepSeek connection from the
+ * env-provided API key, live model discovery (the model id is taken from the
+ * sync response — never hardcoded), a pinned global distillation selector,
+ * and judge/subject keys capped by per-key USD limits (the product's own
+ * pre-call enforcement) as a cost guard.
+ */
+export async function seedLiveTarget(options: {
+  baseUrl: string;
+  live: MemoryE2eLiveConfig;
+  onLog?: (line: string) => void;
+}): Promise<SeedResult> {
+  const { baseUrl, live } = options;
+  const log: string[] = [];
+  const push = (line: string): void => {
+    log.push(line);
+    options.onLog?.(line);
+  };
+
+  const management = await createKey(baseUrl, "memory-e2e-management", log, {
+    scopes: ["manage"],
+  });
+
+  const connectionResponse = await httpJson<{ connection?: { id?: string } }>(
+    `${baseUrl}/api/providers`,
+    {
+      method: "POST",
+      bearer: management.key,
+      body: JSON.stringify({
+        provider: LIVE_PROVIDER_ID,
+        apiKey: live.providerApiKey,
+        name: "memory-e2e-live",
+      }),
+    }
+  );
+  const connectionId =
+    connectionResponse.body.connection?.id ?? (connectionResponse.body as { id?: string }).id;
+  if (!connectionId) {
+    throw new Error(
+      `live seed: provider connection failed: HTTP ${connectionResponse.status} ${JSON.stringify(connectionResponse.body).slice(0, 300)}`
+    );
+  }
+  push(`created ${LIVE_PROVIDER_ID} connection ${connectionId}`);
+
+  const syncResponse = await httpJson<{
+    ok?: boolean;
+    models?: Array<{ id?: string }>;
+    availableModelsCount?: number;
+  }>(`${baseUrl}/api/providers/${encodeURIComponent(connectionId)}/sync-models`, {
+    method: "POST",
+    bearer: management.key,
+  });
+  if (!syncResponse.ok || syncResponse.body.ok !== true) {
+    throw new Error(
+      `live seed: model sync failed: HTTP ${syncResponse.status} ${JSON.stringify(syncResponse.body).slice(0, 300)}`
+    );
+  }
+  const discovered = (syncResponse.body.models ?? [])
+    .map((model) => (typeof model.id === "string" ? model.id : null))
+    .filter((id): id is string => Boolean(id));
+  const modelId = live.modelOverride ?? discovered[0];
+  if (!modelId) {
+    throw new Error(
+      `live seed: sync returned no models and MEMORY_E2E_LIVE_MODEL is unset (${JSON.stringify(syncResponse.body).slice(0, 200)})`
+    );
+  }
+  push(`live model: ${modelId}${live.modelOverride ? " (env override)" : " (discovered)"}`);
+
+  const selectorPut = await httpJson(`${baseUrl}/api/memory/distillation-model`, {
+    method: "PUT",
+    bearer: management.key,
+    body: JSON.stringify({ provider: LIVE_PROVIDER_ID, modelId, scope: "global" }),
+  });
+  if (!selectorPut.ok) {
+    throw new Error(
+      `live seed: global selector failed: HTTP ${selectorPut.status} ${JSON.stringify(selectorPut.body).slice(0, 300)}`
+    );
+  }
+  push(`pinned global distillation selector to ${LIVE_PROVIDER_ID}/${modelId}`);
+
+  const judge = await createKey(baseUrl, "memory-e2e-judge", log, {
+    usageLimitEnabled: true,
+    dailyUsageLimitUsd: live.maxUsd,
+  });
+  push(`judge key created with USD cap ${live.maxUsd} (capture/injection stay off)`);
+
+  let subjectSeq = 0;
+  const createSubject = async (): Promise<SeededKey> => {
+    subjectSeq += 1;
+    return createSubjectKey(baseUrl, `memory-e2e-subject-${subjectSeq}`, log, {
+      usageLimitUsd: live.maxUsd,
+    });
+  };
+  push("subject factory ready (per-fixture owners, USD-capped)");
+
+  await sleep(100);
+  return {
+    nodeId: LIVE_PROVIDER_ID,
+    connectionId,
+    managementKeyId: management.id,
+    managementKey: management.key,
+    judgeKeyId: judge.id,
+    judgeKey: judge.key,
+    createSubject,
+    selectorModel: `${LIVE_PROVIDER_ID}/${modelId}`,
+    gatewayModel: `${LIVE_PROVIDER_ID}/${modelId}`,
     log,
   };
 }
