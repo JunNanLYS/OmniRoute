@@ -733,3 +733,25 @@ test("withOwnerLock reports failure once another owner holds the SQLite lock", a
   const stillHeld = await holder.acquireLock("api-key-contended", "worker-a", 90_000);
   assert.equal(stillHeld?.ownerId, "worker-a");
 });
+
+test("an expired task lease is recovered by the next claim from another worker", async () => {
+  wipeDb();
+  const store = repository.createDistillationStore();
+  const task = repository.enqueueDistillationTask({
+    kind: "L1_extract",
+    scope: "api-key-lease-reclaim",
+    payload: { conversation: "user: hi" },
+    notBefore: 0,
+  });
+
+  // A worker claims the task with a 1 ms lease, then crashes without
+  // completing or renewing — the lease lapses.
+  const claimed = await store.markClaimed(task.id, task.version, "crashed-worker", 1);
+  assert.equal(claimed, true);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  const recovered = await store.claimNextTask(Date.now(), "api-key-lease-reclaim");
+  assert.ok(recovered.task, "an expired lease must make the task claimable again");
+  assert.equal(recovered.task.id, task.id);
+  assert.equal(recovered.task.status, "queued");
+});

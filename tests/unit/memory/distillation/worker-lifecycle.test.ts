@@ -611,3 +611,69 @@ describe("distillation/worker — end-to-end transitions", () => {
     );
   });
 });
+
+describe("distillation/worker — interval scheduling (real timers)", () => {
+  it("fires recurring ticks on the configured interval and drains cleanly", async () => {
+    const store = new InMemoryDistillationStore();
+    store.seed([
+      makeTask({ id: "pace-1", status: "queued", notBefore: 0 }),
+      makeTask({ id: "pace-2", status: "queued", notBefore: 0 }),
+      makeTask({ id: "pace-3", status: "queued", notBefore: 0 }),
+    ]);
+    const callTimes: number[] = [];
+    const executor = makeExecutor({
+      run: async () => {
+        callTimes.push(Date.now());
+        return {
+          text: JSON.stringify([
+            {
+              scene_name: "preferences",
+              message_ids: ["l0-user"],
+              memories: [
+                {
+                  content: "Prefers dark mode",
+                  type: "persona",
+                  source_message_ids: ["l0-user"],
+                  metadata: {},
+                },
+              ],
+            },
+          ]),
+          promptTokens: 1,
+          completionTokens: 1,
+        };
+      },
+    });
+
+    const started = await startDistillationWorker({
+      store,
+      executor,
+      selector: makeSelector(),
+      env: makeEnv({ MEMORY_DISTILLATION_INTERVAL: "1", MEMORY_DISTILLATION_CONCURRENCY: "1" }),
+      runtime: { allowAutomatedTestProcess: true, scheduleTimers: true },
+    });
+    assert.equal(started, true, "worker must start with real timers");
+
+    try {
+      const deadline = Date.now() + 8_000;
+      while (Date.now() < deadline && callTimes.length < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    } finally {
+      await stopDistillationWorker({ force: true, graceMs: 1_000 });
+    }
+
+    // Concurrency 1 means one task per tick: three completions require at
+    // least two interval-fired ticks, so a ~1s gap must exist between calls.
+    assert.equal(callTimes.length, 3, `expected 3 paced model calls, got ${callTimes.length}`);
+    const gaps = [callTimes[1]! - callTimes[0]!, callTimes[2]! - callTimes[1]!];
+    assert.ok(
+      gaps.some((gap) => gap >= 700),
+      `expected interval pacing (~1s) between ticks, gaps=${gaps.join(",")}`
+    );
+    assert.deepEqual(
+      store.snapshot().tasks.map((task) => task.status),
+      ["succeeded", "succeeded", "succeeded"]
+    );
+  });
+});

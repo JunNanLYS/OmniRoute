@@ -83,6 +83,8 @@ The distillation model selector chain (`src/memory/distillation/selector.ts`, fi
 
 If none resolves, the task fails with `model_unset` — there is **no silent fallback**. Failed tasks land in the DLQ; retries are manual via `POST /api/memory/distillation-model/dlq` (`{ ids: [...] }` or `{ all: true }`). L2/L3 regeneration enqueues a task (`POST /api/memory/l2/{id}/regenerate`); the service rejects with `409` when more than 15 errors occurred in the rolling window.
 
+Worker lifecycle is tested separately from the evaluation flow (`tests/unit/memory/distillation/`): start gates, startup reservation, idempotent start, shutdown drain and grace bounds, and permit-pool concurrency in `worker-lifecycle.test.ts` and `permit.test.ts`; **runtime interval scheduling** (recurring ticks on `MEMORY_DISTILLATION_INTERVAL` with real timers) in `worker-lifecycle.test.ts`; **expired task-lease recovery** (a crashed worker's lapsed claim is requeued and reclaimed) in `sqliteStore.test.ts`; status states and enable/disable reconciliation in `runtimeController.test.ts`; config parsing/clamping in `config.test.ts`; graceful-shutdown and boot wiring in `productionLifecycle.test.ts`/`productionRuntime.test.ts`. The background worker never carries the main twelve-fixture evaluation — that is the explicit run control plane below.
+
 ### Explicit distillation run (evaluation control plane)
 
 `POST /api/memory/distillation/run` (`src/memory/distillation/run.ts`) starts a **request-scoped run** that executes the selected layers sequentially (`L1 → L2 → L3`) for one session/owner. It reuses the same store claim/lease protocol, selector chain, executor adapter, handlers, and apply pipeline as the background worker, but is independent of the worker singleton and its lifecycle:
