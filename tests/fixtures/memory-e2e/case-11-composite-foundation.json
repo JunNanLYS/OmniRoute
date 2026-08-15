@@ -1,0 +1,57 @@
+{
+  "id": "11",
+  "title": "复合套件：基础主题（01-05）",
+  "domain": "Composite: engineering preferences, project facts, multi-scene tasks, identity, safety rules",
+  "history": [
+    {
+      "role": "user",
+      "content": "综合同步一轮。工程侧：新模块继续用 TypeScript strict；测试只写 vitest，不再用 jest——这是对之前工具链偏好的延续。项目侧：风控项目 Kraken 立项，负责人是陈露，目标是把规则引擎的决策延迟压到 50ms 以内。"
+    },
+    {
+      "role": "assistant",
+      "content": "已记录：工程偏好延续 TypeScript strict；测试框架统一 vitest（弃 jest）。项目事实：Kraken 风控立项，负责人陈露，目标规则引擎决策延迟 <50ms。"
+    },
+    {
+      "role": "user",
+      "content": "任务侧有两件事并行：Kraken 的规则引擎选型先做 POC，本周出结论；同时我个人的身份信息更新一下——我升职了，现在是首席架构师，不再叫后端架构师，但老周这个称呼不变。"
+    },
+    {
+      "role": "assistant",
+      "content": "明白：Kraken 规则引擎选型本周出 POC 结论；身份更新为首席架构师（称呼仍是老周）。"
+    },
+    {
+      "role": "user",
+      "content": "安全规则同步：Kraken 因为涉及风控资金决策，所有规则变更必须双人评审加灰度验证，这比一般项目的单人评审要求更严，没有例外。"
+    },
+    {
+      "role": "assistant",
+      "content": "已记录：Kraken 属于资金决策链路，规则变更必须双人评审 + 灰度验证，无例外（严于常规项目）。"
+    },
+    {
+      "role": "user",
+      "content": "最后一条任务状态：POC 提前完成了，规则引擎定了用自研轻量引擎而不是开源的 Drools，理由是延迟预算太紧。汇总时别把这些主题混在一起。"
+    },
+    {
+      "role": "assistant",
+      "content": "已记录：Kraken POC 完成，选定自研轻量规则引擎（弃 Drools，因延迟预算紧）。汇总时会按主题分组，不混淆。"
+    }
+  ],
+  "finalUser": "按主题分别总结：工程偏好、Kraken 项目事实与任务状态、我的身份、安全规则。",
+  "mandatoryPoints": [
+    "工程偏好：TypeScript strict、测试统一 vitest（弃 jest）",
+    "Kraken 风控项目立项，负责人陈露，目标决策延迟 50ms 以内",
+    "Kraken 规则引擎 POC 已完成，选定自研轻量引擎（弃 Drools）",
+    "身份更新为首席架构师，称呼仍是老周",
+    "Kraken 规则变更必须双人评审 + 灰度验证，无例外"
+  ],
+  "negativePoints": [
+    "各主题信息不得串写（如把陈露写成工程偏好的负责人）",
+    "Drools 是被放弃的选项，不是选型结果",
+    "旧身份（后端架构师）已被更新，不应作为当前身份"
+  ],
+  "rubrics": {
+    "l1": "L1 应按主题分条记录且互不混淆：偏好、项目、任务、身份、规则各自独立、归属正确。",
+    "l2": "L2 应产出可区分的场景（工程协作、Kraken 项目），跨主题信息不串场。",
+    "l3": "L3 人设应同时内化工程偏好、新身份与风控项目的严格规则，且在对应问题上不越界。"
+  }
+}
