@@ -1,0 +1,48 @@
+{
+  "id": "07",
+  "title": "跨会话实体关系",
+  "domain": "Cross-session entity relationships",
+  "history": [
+    {
+      "role": "user",
+      "content": "理一下组织关系：团队 Omega 负责项目 Phoenix（支付网关重写），团队 Omega 的负责人是陈露；项目 Phoenix 的测试环境统一用 test-phoenix 这个账号体系。"
+    },
+    {
+      "role": "assistant",
+      "content": "已记录：团队 Omega（负责人陈露）负责项目 Phoenix（支付网关重写）；Phoenix 测试环境用 test-phoenix 账号体系。"
+    },
+    {
+      "role": "user",
+      "content": "客户 Acme 的生产账号是 acme-prod，只挂在 Omega 团队名下；对账服务 svc-reconcile 属于财务系统，不是 Phoenix 的，别搞混。"
+    },
+    {
+      "role": "assistant",
+      "content": "明白：acme-prod 是客户 Acme 的生产账号，归属 Omega 团队；svc-reconcile 属于财务系统，与 Phoenix 无关。"
+    },
+    {
+      "role": "user",
+      "content": "上周排查问题时临时借用过 Phoenix 的测试账号查 Acme 的数据，那是一次性操作，不代表账号之间有关联。"
+    },
+    {
+      "role": "assistant",
+      "content": "理解：该次账号借用是一次性排查操作，不构成 acme-prod 与 test-phoenix 之间的持久关联。"
+    }
+  ],
+  "finalUser": "根据已知信息，画出这些团队、项目、账号之间的归属关系。",
+  "mandatoryPoints": [
+    "团队 Omega 负责项目 Phoenix（支付网关重写）",
+    "陈露是团队 Omega 的负责人",
+    "test-phoenix 是 Phoenix 的测试环境账号体系",
+    "acme-prod 是客户 Acme 的生产账号，归属 Omega 团队",
+    "svc-reconcile 属于财务系统，与 Phoenix 无关"
+  ],
+  "negativePoints": [
+    "临时借用测试账号不建立 acme-prod 与 test-phoenix 的持久关联",
+    "svc-reconcile 不应被归到 Phoenix 项目名下"
+  ],
+  "rubrics": {
+    "l1": "L1 应保留每个实体及其归属关系（团队→项目→环境/账号），关系方向不能颠倒。",
+    "l2": "L2 场景应聚合组织与资源映射，摘要能回答\"谁负责什么、账号挂在哪\"。",
+    "l3": "L3 人设涉及排障或权限问题时能给出正确的账号归属与团队边界。"
+  }
+}

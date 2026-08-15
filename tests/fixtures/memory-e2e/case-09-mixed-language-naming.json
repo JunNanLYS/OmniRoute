@@ -1,0 +1,49 @@
+{
+  "id": "09",
+  "title": "混合语言命名规范",
+  "domain": "Mixed-language naming conventions",
+  "history": [
+    {
+      "role": "user",
+      "content": "定一下命名规范：新服务名一律用英文 kebab-case，比如 payment-gateway、report-job；服务里的内部模块名用 camelCase，像 orderService。"
+    },
+    {
+      "role": "assistant",
+      "content": "已记录：服务名用英文 kebab-case（payment-gateway、report-job）；内部模块名用 camelCase（orderService）。"
+    },
+    {
+      "role": "user",
+      "content": "数据库表和列名用 snake_case，比如 trade_order、created_at；代码注释和文档用中文写；commit message 用英文类型前缀加中文描述，格式是 feat(payment): 新增对账。"
+    },
+    {
+      "role": "assistant",
+      "content": "明白：表与列名 snake_case（trade_order、created_at）；注释与文档用中文；commit 格式为英文类型前缀 + 中文描述，如 feat(payment): 新增对账。"
+    },
+    {
+      "role": "user",
+      "content": "人名规范：提到具体人时用拼音首字母大写（Zhou Ming、Chen Lu），不要用连写小写；另外之前讨论过用驼峰命名服务的方案（PaymentGateway）已经否了，以 kebab-case 为准。"
+    },
+    {
+      "role": "assistant",
+      "content": "已记录：人名用拼音且首字母大写（Zhou Ming、Chen Lu）；驼峰服务名方案（PaymentGateway）已被否决，服务名以 kebab-case 为准。"
+    }
+  ],
+  "finalUser": "把我们的命名规范按场景汇总成一份速查表。",
+  "mandatoryPoints": [
+    "服务名：英文 kebab-case（payment-gateway）",
+    "内部模块名：camelCase（orderService）",
+    "数据库表/列名：snake_case（trade_order、created_at）",
+    "代码注释与文档用中文",
+    "commit message：英文类型前缀 + 中文描述（feat(payment): 新增对账）",
+    "人名拼音首字母大写（Zhou Ming、Chen Lu）"
+  ],
+  "negativePoints": [
+    "驼峰式服务名（PaymentGateway）方案已否决，不是现行规范",
+    "人名连写小写（zhouming）不符合规范"
+  ],
+  "rubrics": {
+    "l1": "L1 应逐条保留各场景的命名规范及示例，大小写形式必须原样保真，不串格式。",
+    "l2": "L2 场景摘要应把命名规范按场景组织，示例标识符与规范一一对应。",
+    "l3": "L3 人设在生成代码、表名或 commit message 时应遵循这些命名约定。"
+  }
+}
