@@ -14,7 +14,7 @@ const L3_MEMORY_TRIGGER_COUNT = 50;
 const MAX_L2_INPUT_MEMORIES = 100;
 const MAX_L3_SAMPLES = 15;
 
-interface EnqueueInput {
+export interface EnqueueInput {
   kind: DistillationTaskKind;
   scope: string;
   payload: unknown;
@@ -258,36 +258,22 @@ function inferPromptMode(taskScope: string): PromptMode {
   return memories.some((memory) => memory.type.startsWith("work_")) ? "code" : "chat";
 }
 
-function scheduleL3(
-  task: DistillationTask,
-  resultPayload: Record<string, unknown>,
-  deps: DistillationApplyDeps
-): void {
-  const owner = ownerFromApiKeyId(task.scope);
+/**
+ * Build the L3 persona task input for a scope (samples from the hottest
+ * scenes, current baseline version). Returns null when the owner has no
+ * scenes to distill from. This is the forced-scheduling building block the
+ * explicit distillation run uses to guarantee L3 execution; the background
+ * path (`scheduleL3`) applies its own gating before calling it.
+ */
+export function buildL3PersonaTask(scope: string): EnqueueInput | null {
+  const owner = ownerFromApiKeyId(scope);
   const persona = getActivePersona(owner);
   const scenes = listScenes({ owner });
-  if (scenes.length === 0) return;
-  const explicitRequest = resultPayload.personaUpdateRequested === true;
-  const since = persona ? Date.parse(persona.updatedAt) : 0;
-  const memoriesSincePersona = persona
-    ? listMemories({ owner }).filter((memory) => Date.parse(memory.updatedAt) > since).length
-    : 0;
-  const shouldSchedule =
-    explicitRequest ||
-    !persona ||
-    !persona.content.trim() ||
-    memoriesSincePersona >= L3_MEMORY_TRIGGER_COUNT;
-  if (!shouldSchedule) return;
-
-  const taskPayload = asRecord(task.payload) ?? {};
-  const requestedMode = nonEmptyString(taskPayload.promptMode);
-  const promptMode: PromptMode =
-    requestedMode === "chat" || requestedMode === "code"
-      ? requestedMode
-      : (persona?.promptMode ?? inferPromptMode(task.scope));
-  deps.enqueueTask({
+  if (scenes.length === 0) return null;
+  const promptMode: PromptMode = persona?.promptMode ?? inferPromptMode(scope);
+  return {
     kind: "L3_persona",
-    scope: task.scope,
+    scope,
     payload: {
       samples: scenes
         .slice()
@@ -300,8 +286,41 @@ function scheduleL3(
       allowUserOverwrite: false,
     },
     priority: 4,
-    notBefore: initialDelayForKind("L3_persona", deps.now?.() ?? Date.now()),
     coalesceKey: "l3:v1:persona",
+  };
+}
+
+function scheduleL3(
+  task: DistillationTask,
+  resultPayload: Record<string, unknown>,
+  deps: DistillationApplyDeps
+): void {
+  const owner = ownerFromApiKeyId(task.scope);
+  const persona = getActivePersona(owner);
+  const explicitRequest = resultPayload.personaUpdateRequested === true;
+  const since = persona ? Date.parse(persona.updatedAt) : 0;
+  const memoriesSincePersona = persona
+    ? listMemories({ owner }).filter((memory) => Date.parse(memory.updatedAt) > since).length
+    : 0;
+  const shouldSchedule =
+    explicitRequest ||
+    !persona ||
+    !persona.content.trim() ||
+    memoriesSincePersona >= L3_MEMORY_TRIGGER_COUNT;
+  if (!shouldSchedule) return;
+
+  const built = buildL3PersonaTask(task.scope);
+  if (!built) return;
+  const taskPayload = asRecord(task.payload) ?? {};
+  const requestedMode = nonEmptyString(taskPayload.promptMode);
+  const nextPayload = asRecord(built.payload) ?? {};
+  if (requestedMode === "chat" || requestedMode === "code") {
+    nextPayload.promptMode = requestedMode;
+  }
+  deps.enqueueTask({
+    ...built,
+    payload: nextPayload,
+    notBefore: initialDelayForKind("L3_persona", deps.now?.() ?? Date.now()),
   });
 }
 

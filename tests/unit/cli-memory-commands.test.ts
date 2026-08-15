@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -393,6 +394,8 @@ test("memory CLI exports and command tree contain only live cutover surfaces", a
     "runL2Read",
     "runL3Read",
     "runMemoryList",
+    "runL0Import",
+    "runDistillationRun",
     "runDistillationModelGet",
     "runDistillationModelSet",
     "runDistillationModelDelete",
@@ -419,7 +422,9 @@ test("memory CLI exports and command tree contain only live cutover surfaces", a
       description: () => node,
       command(commandName: string) {
         node.sub.push(commandName);
-        return makeNode(`${node.name}>${commandName}`);
+        const child = makeNode(`${node.name}>${commandName}`);
+        captured.push(child);
+        return child;
       },
       option: () => node,
       action: () => node,
@@ -436,7 +441,22 @@ test("memory CLI exports and command tree contain only live cutover surfaces", a
   mod.registerMemory(root);
   const memory = captured.find((entry) => entry.name === "memory");
   assert.ok(memory);
-  assert.deepEqual(memory.sub, ["l0", "l1", "l2", "l3", "list", "distillation-model", "dlq"]);
+  assert.deepEqual(memory.sub, [
+    "l0",
+    "l1",
+    "l2",
+    "l3",
+    "list",
+    "distillation-model",
+    "distillation",
+    "dlq",
+  ]);
+  const distillationNode = captured.find((entry) => entry.name === "memory>distillation");
+  assert.ok(distillationNode);
+  assert.deepEqual(distillationNode.sub, ["run"]);
+  const l0Node = captured.find((entry) => entry.name === "memory>l0");
+  assert.ok(l0Node);
+  assert.deepEqual(l0Node.sub, ["search <query>", "import <file>"]);
 });
 
 test("memory CLI source contains no removed v3 or invented route paths", () => {
@@ -475,6 +495,199 @@ test("CLI memory commands sanitize error responses", async () => {
   } finally {
     process.exit = originalExit;
     process.stderr.write = originalWrite;
+    restore();
+  }
+});
+
+// ── memory l0 import + memory distillation run ───────────────────────────────
+
+function writeTempFixture(name: string, data: unknown): string {
+  const file = path.join(os.tmpdir(), `omniroute-cli-${name}-${Date.now()}-${Math.random()}.json`);
+  fs.writeFileSync(file, JSON.stringify(data));
+  return file;
+}
+
+test("runL0Import reads a fixture file and POSTs the canonical L0 import schema", async () => {
+  const file = writeTempFixture("l0-import", {
+    history: [
+      { role: "user", content: "记住我用 TypeScript" },
+      { role: "assistant", content: "好的" },
+    ],
+  });
+  let capturedUrl = "";
+  let capturedInit: RequestInit | undefined;
+  const restore = installFetch((url, init) => {
+    capturedUrl = String(url);
+    capturedInit = init;
+    return Promise.resolve(makeResp({ success: true, importedIds: ["m1", "m2"] }, 201));
+  });
+  try {
+    const { runL0Import } = await import("../../bin/cli/commands/memory.mjs");
+    const output = await captureStdout(() =>
+      runL0Import(file, { session: "s-import-1" }, makeCmd() as never)
+    );
+    const url = new URL(capturedUrl);
+    assert.equal(url.pathname, "/api/memory/l0");
+    assert.equal(capturedInit?.method, "POST");
+    const body = JSON.parse(String(capturedInit?.body)) as {
+      sessionId: string;
+      items: Array<{ idempotencyKey: string; role: string; content: string }>;
+    };
+    assert.equal(body.sessionId, "s-import-1");
+    assert.equal(body.items.length, 2);
+    assert.equal(body.items[0]?.role, "user");
+    assert.equal(body.items[0]?.content, "记住我用 TypeScript");
+    assert.equal(body.items[1]?.role, "assistant");
+    for (const item of body.items) {
+      assert.ok(typeof item.idempotencyKey === "string" && item.idempotencyKey.length > 0);
+    }
+    const parsed = JSON.parse(output) as { success: boolean; imported: number };
+    assert.equal(parsed.success, true);
+    assert.equal(parsed.imported, 2);
+  } finally {
+    fs.rmSync(file, { force: true });
+    restore();
+  }
+});
+
+test("runL0Import rejects fixtures without a usable message array", async () => {
+  const originalExit = process.exit;
+  let exitCode: number | null = null;
+  process.exit = ((code?: number) => {
+    exitCode = code ?? 0;
+    throw new Error("__exit__");
+  }) as never;
+  const restore = installFetch(() => Promise.resolve(makeResp({}, 201)));
+  try {
+    const { runL0Import } = await import("../../bin/cli/commands/memory.mjs");
+    const file = writeTempFixture("l0-bad", { finalUser: "no history" });
+    await runL0Import(file, { session: "s1" }, makeCmd() as never).catch(() => undefined);
+    assert.equal(exitCode, 2);
+    fs.rmSync(file, { force: true });
+
+    exitCode = null;
+    const invalidRoles = writeTempFixture("l0-roles", {
+      history: [{ role: "system", content: "not allowed" }],
+    });
+    await runL0Import(invalidRoles, { session: "s1" }, makeCmd() as never).catch(() => undefined);
+    assert.equal(exitCode, 2);
+    fs.rmSync(invalidRoles, { force: true });
+  } finally {
+    process.exit = originalExit;
+    restore();
+  }
+});
+
+const RUN_ACCEPTED = {
+  runId: "run-abc",
+  status: "running",
+  session: "s-run-1",
+  layers: ["l1", "l2", "l3"],
+  statusUrl: "/api/memory/distillation/run/run-abc",
+};
+
+test("runDistillationRun POSTs the run route and polls status while --wait", async () => {
+  const calls: Array<{ method: string; pathname: string }> = [];
+  let capturedInit: RequestInit | undefined;
+  let capturedUrl = "";
+  const restore = installFetch((url, init) => {
+    const parsed = new URL(String(url));
+    const method = String(init?.method ?? "GET").toUpperCase();
+    calls.push({ method, pathname: parsed.pathname });
+    if (method === "POST") {
+      capturedUrl = String(url);
+      capturedInit = init;
+      return Promise.resolve(makeResp(RUN_ACCEPTED, 202));
+    }
+    return Promise.resolve(
+      makeResp({
+        data: {
+          runId: "run-abc",
+          status: "succeeded",
+          session: "s-run-1",
+          layers: ["l1", "l2", "l3"],
+          layerStates: [
+            { layer: "l1", status: "succeeded", taskIds: ["t1"] },
+            { layer: "l2", status: "succeeded", taskIds: ["t2"] },
+            { layer: "l3", status: "succeeded", taskIds: ["t3"] },
+          ],
+          evidence: null,
+        },
+      })
+    );
+  });
+  try {
+    const { runDistillationRun } = await import("../../bin/cli/commands/memory.mjs");
+    const output = await captureStdout(() =>
+      runDistillationRun(
+        { session: "s-run-1", layers: "l1,l2", wait: true, timeout: "1000", apiKeyId: "key-1" },
+        makeCmd() as never
+      )
+    );
+    assert.equal(calls[0]?.method, "POST");
+    assert.equal(calls[0]?.pathname, "/api/memory/distillation/run");
+    const postUrl = new URL(capturedUrl);
+    assert.equal(postUrl.searchParams.get("apiKeyId"), "key-1");
+    assert.deepEqual(JSON.parse(String(capturedInit?.body)), {
+      session: "s-run-1",
+      layers: ["l1", "l2"],
+    });
+    assert.ok(calls.length >= 2, "polling must issue at least one status GET");
+    assert.equal(calls[1]?.method, "GET");
+    assert.equal(calls[1]?.pathname, "/api/memory/distillation/run/run-abc");
+    const parsed = JSON.parse(output) as { runId: string; status: string };
+    assert.equal(parsed.runId, "run-abc");
+    assert.equal(parsed.status, "succeeded");
+  } finally {
+    restore();
+  }
+});
+
+test("runDistillationRun exits 124 when --wait exceeds --timeout", async () => {
+  const originalExit = process.exit;
+  let exitCode: number | null = null;
+  process.exit = ((code?: number) => {
+    exitCode = code ?? 0;
+    throw new Error("__exit__");
+  }) as never;
+  const restore = installFetch((_url, init) => {
+    if (String(init?.method ?? "GET").toUpperCase() === "POST") {
+      return Promise.resolve(makeResp(RUN_ACCEPTED, 202));
+    }
+    return Promise.resolve(makeResp({ data: { runId: "run-abc", status: "running" } }));
+  });
+  try {
+    const { runDistillationRun } = await import("../../bin/cli/commands/memory.mjs");
+    await runDistillationRun(
+      { session: "s-run-1", wait: true, timeout: "50" },
+      makeCmd() as never
+    ).catch(() => undefined);
+    assert.equal(exitCode, 124);
+  } finally {
+    process.exit = originalExit;
+    restore();
+  }
+});
+
+test("runDistillationRun without --wait prints the accepted run only", async () => {
+  const calls: Array<{ method: string; pathname: string }> = [];
+  const restore = installFetch((url, init) => {
+    const parsed = new URL(String(url));
+    calls.push({ method: String(init?.method ?? "GET"), pathname: parsed.pathname });
+    return Promise.resolve(makeResp(RUN_ACCEPTED, 202));
+  });
+  try {
+    const { runDistillationRun } = await import("../../bin/cli/commands/memory.mjs");
+    const output = await captureStdout(() =>
+      runDistillationRun({ session: "s-run-1" }, makeCmd() as never)
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.method, "POST");
+    assert.equal(calls[0]?.pathname, "/api/memory/distillation/run");
+    const parsed = JSON.parse(output) as { runId: string; statusUrl: string };
+    assert.equal(parsed.runId, "run-abc");
+    assert.equal(parsed.statusUrl, "/api/memory/distillation/run/run-abc");
+  } finally {
     restore();
   }
 });

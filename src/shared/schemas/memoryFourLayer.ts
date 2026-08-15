@@ -275,3 +275,25 @@ export const DistillationDlqRetrySchema = z
   });
 
 export type DistillationDlqRetry = z.infer<typeof DistillationDlqRetrySchema>;
+
+/**
+ * Explicit distillation run — the evaluation control plane.
+ *
+ * `POST /api/memory/distillation/run` executes the selected layers
+ * sequentially (L1 → L2 → L3) for one session. It is NOT another background
+ * schedule: failures terminate dependent layers, produce task/DLQ evidence,
+ * and are never retried inside the run — a rerun mints a new run id.
+ */
+export const DistillationRunLayerSchema = z.enum(["l1", "l2", "l3"]);
+
+export const DistillationRunPostSchema = z
+  .object({
+    session: z.string().min(1).max(256),
+    layers: z.array(DistillationRunLayerSchema).min(1).max(3).default(["l1", "l2", "l3"]),
+    /** Per-layer wall-clock budget for the explicit run (ms). */
+    layerTimeoutMs: z.number().int().min(1_000).max(3_600_000).default(180_000),
+  })
+  .strict();
+
+export type DistillationRunPost = z.infer<typeof DistillationRunPostSchema>;
+export type DistillationRunLayer = z.infer<typeof DistillationRunLayerSchema>;

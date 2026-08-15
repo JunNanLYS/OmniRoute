@@ -287,7 +287,7 @@ export function createProductionSelectorDeps(
   };
 }
 
-async function createDefaultProductionExecutorDeps(): Promise<ExecutorDeps> {
+export async function createDefaultProductionExecutorDeps(): Promise<ExecutorDeps> {
   const [{ getExecutor }, { getProviderCredentials }, { getPricingForModel }] = await Promise.all([
     import("@omniroute/open-sse/executors/index.ts"),
     import("@/sse/services/auth"),
@@ -300,7 +300,7 @@ async function createDefaultProductionExecutorDeps(): Promise<ExecutorDeps> {
   });
 }
 
-async function createDefaultProductionSelectorDeps(): Promise<SelectorDeps> {
+export async function createDefaultProductionSelectorDeps(): Promise<SelectorDeps> {
   const [operations, providers, models] = await Promise.all([
     import("../operations.ts"),
     import("@/lib/db/providers"),

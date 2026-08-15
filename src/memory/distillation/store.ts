@@ -101,8 +101,14 @@ export interface ClaimResult {
 export interface DistillationStore {
   // ── Queue polling & lifecycle ─────────────────────────────────────────
   /** Highest-priority task whose `notBefore <= now` and `status === 'queued'`.
-   *  Returns `task: null` when the queue is empty. */
-  claimNextTask(now: number, scope: string | null): Promise<ClaimResult>;
+   *  Returns `task: null` when the queue is empty. `kinds` (optional)
+   *  restricts the claim to a subset of task kinds — the explicit run
+   *  orchestrator uses it to execute one layer at a time. */
+  claimNextTask(
+    now: number,
+    scope: string | null,
+    kinds?: readonly DistillationTaskKind[]
+  ): Promise<ClaimResult>;
 
   /** Optimistic transition queued → claimed using `version`. Returns false
    *  when another worker already advanced the row. */
@@ -194,12 +200,18 @@ export class InMemoryDistillationStore implements DistillationStore {
     };
   }
 
-  async claimNextTask(now: number, scope: string | null): Promise<ClaimResult> {
+  async claimNextTask(
+    now: number,
+    scope: string | null,
+    kinds?: readonly DistillationTaskKind[]
+  ): Promise<ClaimResult> {
+    const allowed = kinds ? new Set(kinds) : null;
     let best: DistillationTask | null = null;
     for (const t of this.tasks.values()) {
       if (t.status !== "queued") continue;
       if (t.notBefore > now) continue;
       if (scope !== null && t.scope !== scope) continue;
+      if (allowed && !allowed.has(t.kind)) continue;
       if (best === null || t.priority > best.priority) best = t;
     }
     if (!best) return { task: null, leaseMs: 60_000 };

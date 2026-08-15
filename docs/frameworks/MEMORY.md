@@ -83,6 +83,19 @@ The distillation model selector chain (`src/memory/distillation/selector.ts`, fi
 
 If none resolves, the task fails with `model_unset` — there is **no silent fallback**. Failed tasks land in the DLQ; retries are manual via `POST /api/memory/distillation-model/dlq` (`{ ids: [...] }` or `{ all: true }`). L2/L3 regeneration enqueues a task (`POST /api/memory/l2/{id}/regenerate`); the service rejects with `409` when more than 15 errors occurred in the rolling window.
 
+### Explicit distillation run (evaluation control plane)
+
+`POST /api/memory/distillation/run` (`src/memory/distillation/run.ts`) starts a **request-scoped run** that executes the selected layers sequentially (`L1 → L2 → L3`) for one session/owner. It reuses the same store claim/lease protocol, selector chain, executor adapter, handlers, and apply pipeline as the background worker, but is independent of the worker singleton and its lifecycle:
+
+- Each layer drains its queue (`claimNextTask` scoped by owner + kind) before the next begins.
+- L1 failure marks L2/L3 `skipped`; L2 failure marks L3 `skipped`.
+- A task failure is **terminal**: the task moves to the DLQ with sanitized evidence and is never retried inside the run — a rerun mints a new run id (`POST` always returns a fresh `runId`).
+- Queued work for the active layer is expedited to "due now", so background debounce cadences (L1 idle window, L2 scene debounce) do not stall a run; the background worker's own scheduling is untouched.
+- When `l3` is selected, the L3 persona task is force-enqueued after L2 completes (`buildL3PersonaTask`) — the background `scheduleL3` gating cannot suppress it.
+- Per-layer wall-clock budget defaults to 180 000 ms (body `layerTimeoutMs`, clamp 1 000–3 600 000); a budget overrun fails the layer with kind `layer_timeout`.
+
+The response is `202` with `{ runId, status: "running", session, layers, statusUrl }`; run status (layer states, task ids, and terminal task/DLQ evidence) is read from `GET /api/memory/distillation/run/{runId}`. Run records live in-process (the registry on `globalThis.__omnirouteDistillationRuns`), which matches the isolated-server evaluation use; the owner is derived from the auth subject and self callers cannot cross owners.
+
 ## Injection: L3 + L2 + L1 (budgeted, non-blocking)
 
 When `injectionEnabled=true` and the request is not a no-memory request, the chat pipeline injects, in order:
@@ -147,19 +160,21 @@ All routes derive the owner from the auth subject: a dashboard session (manageme
 
 ### Maintenance
 
-| Method   | Path                                 | Description                                                                                                                             |
-| -------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`    | `/api/memory/pipeline-settings`      | Read effective owner-scoped capture/injection settings and their `per-key`/`env`/`default` source layer.                                |
-| `PUT`    | `/api/memory/pipeline-settings`      | Save `{ captureEnabled, injectionEnabled }` for the selected API key owner.                                                             |
-| `DELETE` | `/api/memory/pipeline-settings`      | Remove the selected owner's override and return the environment/default fallback.                                                       |
-| GET      | /api/memory/distillation-worker      | Read process-global worker settings and current in-process runtime status (management auth only).                                       |
-| PUT      | /api/memory/distillation-worker      | Save { enabled, intervalSeconds, concurrency } and reconcile the worker immediately (management auth only).                             |
-| DELETE   | /api/memory/distillation-worker      | Remove the stored runtime row and return to environment/default fallback (management auth only).                                        |
-| `GET`    | `/api/memory/distillation-model`     | Inspect the effective selector — returns `{ provider, modelId, sourceLayer, scope, apiKeyId }` per tier (`self`/`global`/`env`/`auto`). |
-| `PUT`    | `/api/memory/distillation-model`     | Set a selector — body: `{ provider, modelId, scope: "self"\|"global", apiKeyId? }`. Management only for `apiKeyId` targeting.           |
-| `DELETE` | `/api/memory/distillation-model`     | Clear a selector tier — body: `{ scope, apiKeyId? }`.                                                                                   |
-| `GET`    | `/api/memory/distillation-model/dlq` | List failed distillation tasks — `?limit=`, `?statuses=`. Returns `{ data, pagination }`.                                               |
-| `POST`   | `/api/memory/distillation-model/dlq` | Retry — body: `{ ids: [...] }` or `{ all: true }` (exactly one required).                                                               |
+| Method   | Path                                 | Description                                                                                                                                                                              |
+| -------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/memory/pipeline-settings`      | Read effective owner-scoped capture/injection settings and their `per-key`/`env`/`default` source layer.                                                                                 |
+| `PUT`    | `/api/memory/pipeline-settings`      | Save `{ captureEnabled, injectionEnabled }` for the selected API key owner.                                                                                                              |
+| `DELETE` | `/api/memory/pipeline-settings`      | Remove the selected owner's override and return the environment/default fallback.                                                                                                        |
+| GET      | /api/memory/distillation-worker      | Read process-global worker settings and current in-process runtime status (management auth only).                                                                                        |
+| PUT      | /api/memory/distillation-worker      | Save { enabled, intervalSeconds, concurrency } and reconcile the worker immediately (management auth only).                                                                              |
+| DELETE   | /api/memory/distillation-worker      | Remove the stored runtime row and return to environment/default fallback (management auth only).                                                                                         |
+| `GET`    | `/api/memory/distillation-model`     | Inspect the effective selector — returns `{ provider, modelId, sourceLayer, scope, apiKeyId }` per tier (`self`/`global`/`env`/`auto`).                                                  |
+| `PUT`    | `/api/memory/distillation-model`     | Set a selector — body: `{ provider, modelId, scope: "self"\|"global", apiKeyId? }`. Management only for `apiKeyId` targeting.                                                            |
+| `DELETE` | `/api/memory/distillation-model`     | Clear a selector tier — body: `{ scope, apiKeyId? }`.                                                                                                                                    |
+| `GET`    | `/api/memory/distillation-model/dlq` | List failed distillation tasks — `?limit=`, `?statuses=`. Returns `{ data, pagination }`.                                                                                                |
+| `POST`   | `/api/memory/distillation-model/dlq` | Retry — body: `{ ids: [...] }` or `{ all: true }` (exactly one required).                                                                                                                |
+| `POST`   | `/api/memory/distillation/run`       | Start an explicit sequential distillation run — body: `{ session, layers?: ["l1","l2","l3"] (default all), layerTimeoutMs? (default 180000) }`. Returns `202 { runId, statusUrl, ... }`. |
+| `GET`    | `/api/memory/distillation/run/{id}`  | Read run status — `{ data: { runId, status, layerStates[], evidence } }`. Owner-scoped; unknown/cross-owner ids return 404.                                                              |
 
 > **Removed (v3.x routes, no replacement):** `/api/memory` (root CRUD), `/api/memory/{id}` (single-entry CRUD), `/api/memory/health`, `/api/memory/engine-status`, `/api/memory/reindex`, `/api/memory/retrieve-preview`, `/api/memory/summarize`, `/api/memory/embedding-providers`, `/api/settings/memory`, `/api/settings/qdrant/*`. These routes are gone; clients calling them receive `404 Not Found`. There is **no compat shim** — operators must migrate to the four-layer endpoints above.
 
@@ -187,16 +202,20 @@ The v3.x `omniroute memory ...` commands are replaced by layer-scoped commands (
 
 ```
 omniroute memory l0 search <query>   [--session <id>] [--scene <name>] [--limit 1-100]
+omniroute memory l0 import <file>    --session <id> [--api-key-id <id>]
 omniroute memory l1 search <query>   [--session <id>] [--scene <name>] [--limit 1-100]
 omniroute memory l2 read <id>
 omniroute memory l3 read             [--session <id>]
 omniroute memory list                [--session <id>] [--scene <name>] [--limit 1-100]
+omniroute memory distillation run    [--api-key-id <id>] --session <id> [--layers l1,l2,l3] [--wait] [--timeout 180000]
 omniroute memory distillation-model get    [--api-key-id <id>]
 omniroute memory distillation-model set <provider> <model-id> [--scope self|global] [--api-key-id <id>]
 omniroute memory distillation-model delete [--scope self|global] [--api-key-id <id>]
 omniroute memory dlq list            [--limit 1-200] [--statuses <list>]
 omniroute memory dlq retry [ids...]  [--all] [--yes]
 ```
+
+`l0 import` reads a conversation fixture (a message array, `{ history: [...] }`, or `{ items: [...] }`), takes only `role` (user/assistant) and `content` per entry, and POSTs the canonical L0 import schema with deterministic idempotency keys (`<session>:<index>`), so re-imports are idempotent and timestamps stay importer-generated in array order. `distillation run` POSTs the explicit run route and, with `--wait`, polls `statusUrl` every 2 s until the run is terminal or the total wait budget (`--timeout`, default 180 000 ms) expires — timeout exits `124`, a failed run exits `1`.
 
 ## L1 Types
 

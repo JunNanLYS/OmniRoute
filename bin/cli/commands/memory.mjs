@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+
 import { apiFetch } from "../api.mjs";
 import { emit } from "../output.mjs";
 import { t } from "../i18n.mjs";
@@ -11,6 +15,11 @@ const MAX_QUERY_LEN = 1024;
 const MAX_ID_LEN = 256;
 const MAX_SESSION_LEN = 256;
 const MAX_ERROR_LEN = 4096;
+const MAX_L0_IMPORT_ITEMS = 500;
+const MAX_L0_CONTENT_LEN = 65_536;
+const DISTILLATION_RUN_LAYERS = ["l1", "l2", "l3"];
+const DISTILLATION_RUN_POLL_MS = 2000;
+const DISTILLATION_RUN_TIMEOUT_MS = 180_000;
 const SOURCE_EXT = ["ts", "tsx", "js", "jsx", "mjs", "cjs"];
 
 function sanitizeErrorMessage(message) {
@@ -247,6 +256,162 @@ export async function runDlqRetry(ids, opts, cmd) {
   emit(payload, cmd.optsWithGlobals());
 }
 
+// ── memory l0 import ─────────────────────────────────────────────────────────
+
+/**
+ * Read a conversation fixture and map it to the canonical L0 import schema.
+ * Accepts a bare message array, `{ history: [...] }`, or `{ items: [...] }`.
+ * Only `role` and `content` are taken from each entry; idempotency keys are
+ * generated deterministically from the session + array index so re-imports
+ * are idempotent. Timestamps are left to the importer (array order).
+ */
+function readL0FixtureItems(file, sessionId) {
+  let raw;
+  try {
+    raw = fs.readFileSync(path.resolve(file), "utf8");
+  } catch {
+    process.stderr.write(`Cannot read fixture file: ${file}\n`);
+    process.exit(2);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    process.stderr.write("Fixture file is not valid JSON.\n");
+    process.exit(2);
+  }
+  const list = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.history)
+      ? parsed.history
+      : Array.isArray(parsed?.items)
+        ? parsed.items
+        : null;
+  if (!list) {
+    process.stderr.write("Fixture must be a message array or contain history/items.\n");
+    process.exit(2);
+  }
+  const items = [];
+  for (let index = 0; index < list.length && items.length < MAX_L0_IMPORT_ITEMS; index++) {
+    const entry = list[index] && typeof list[index] === "object" ? list[index] : {};
+    if (entry.role !== "user" && entry.role !== "assistant") {
+      process.stderr.write(`Fixture message ${index}: role must be "user" or "assistant".\n`);
+      process.exit(2);
+    }
+    const content = typeof entry.content === "string" ? entry.content.trim() : "";
+    if (!content) {
+      process.stderr.write(`Fixture message ${index}: content is required.\n`);
+      process.exit(2);
+    }
+    items.push({
+      idempotencyKey: `${sessionId}:${index}`,
+      role: entry.role,
+      content: content.slice(0, MAX_L0_CONTENT_LEN),
+    });
+  }
+  if (items.length === 0) {
+    process.stderr.write("Fixture contains no importable messages.\n");
+    process.exit(2);
+  }
+  return items;
+}
+
+export async function runL0Import(file, opts, cmd) {
+  const session = trimLen(opts.session, MAX_SESSION_LEN);
+  if (!session) {
+    process.stderr.write("Session is required (--session <id>).\n");
+    process.exit(2);
+  }
+  if (!file) {
+    process.stderr.write("Fixture file is required.\n");
+    process.exit(2);
+  }
+  const items = readL0FixtureItems(file, session);
+  const query = opts.apiKeyId
+    ? `?apiKeyId=${encodeURIComponent(trimLen(opts.apiKeyId, MAX_ID_LEN))}`
+    : "";
+  const payload = await responseJson(
+    await apiFetch(`/api/memory/l0${query}`, {
+      method: "POST",
+      body: { sessionId: session, items },
+    })
+  );
+  const importedIds = Array.isArray(payload.importedIds) ? payload.importedIds : [];
+  emit({ success: true, imported: importedIds.length, importedIds }, cmd.optsWithGlobals());
+}
+
+// ── memory distillation run ──────────────────────────────────────────────────
+
+function parseRunLayers(raw) {
+  const requested = String(raw ?? "l1,l2,l3")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (requested.length === 0) return [...DISTILLATION_RUN_LAYERS];
+  const invalid = requested.filter((layer) => !DISTILLATION_RUN_LAYERS.includes(layer));
+  if (invalid.length > 0) {
+    process.stderr.write(`Invalid layers: ${invalid.join(", ")}. Use a subset of l1,l2,l3.\n`);
+    process.exit(2);
+  }
+  return DISTILLATION_RUN_LAYERS.filter((layer) => requested.includes(layer));
+}
+
+export async function runDistillationRun(opts, cmd) {
+  const session = trimLen(opts.session, MAX_SESSION_LEN);
+  if (!session) {
+    process.stderr.write("Session is required (--session <id>).\n");
+    process.exit(2);
+  }
+  const layers = parseRunLayers(opts.layers);
+  const timeoutRaw = Number.parseInt(String(opts.timeout ?? ""), 10);
+  const timeoutMs =
+    Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : DISTILLATION_RUN_TIMEOUT_MS;
+
+  const query = opts.apiKeyId
+    ? `?apiKeyId=${encodeURIComponent(trimLen(opts.apiKeyId, MAX_ID_LEN))}`
+    : "";
+  const accepted = asRecord(
+    await responseJson(
+      await apiFetch(`/api/memory/distillation/run${query}`, {
+        method: "POST",
+        body: { session, layers },
+      })
+    )
+  );
+  const statusUrl =
+    typeof accepted.statusUrl === "string" && accepted.statusUrl
+      ? accepted.statusUrl
+      : accepted.runId
+        ? `/api/memory/distillation/run/${encodeURIComponent(String(accepted.runId))}`
+        : null;
+
+  if (!opts.wait || !statusUrl) {
+    emit(accepted, cmd.optsWithGlobals());
+    return;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const payload = asRecord(await responseJson(await apiFetch(statusUrl)));
+    const record = asRecord(payload.data ?? payload);
+    const status = typeof record.status === "string" ? record.status : "running";
+    if (status !== "running") {
+      emit(record, cmd.optsWithGlobals());
+      if (status === "failed") {
+        process.stderr.write(`Distillation run ${String(record.runId ?? "")} failed.\n`);
+        process.exit(1);
+      }
+      return;
+    }
+    if (Date.now() >= deadline) break;
+    await sleep(Math.min(DISTILLATION_RUN_POLL_MS, deadline - Date.now()));
+  }
+  process.stderr.write(
+    `Timed out waiting for distillation run ${String(accepted.runId ?? "")} after ${timeoutMs}ms.\n`
+  );
+  process.exit(124);
+}
+
 export function registerMemory(program) {
   const memory = program.command("memory").description(t("memory.description"));
 
@@ -257,6 +422,11 @@ export function registerMemory(program) {
     .option("--scene <name>", "Filter by scene name")
     .option("--limit <n>", "Max items to return (1-100, default 20)", String, "20")
     .action(runL0Search);
+  l0.command("import <file>")
+    .description("Import a conversation fixture as L0 history")
+    .option("--session <id>", "Target session id (required)")
+    .option("--api-key-id <id>", "Target API key (management only)")
+    .action(runL0Import);
 
   const l1 = memory.command("l1").description("Layer-1 curated memory operations");
   l1.command("search <query>")
@@ -300,6 +470,19 @@ export function registerMemory(program) {
     .option("--scope <scope>", "Selector scope: self or global", "self")
     .option("--api-key-id <id>", "Target API key for self scope (management only)")
     .action(runDistillationModelDelete);
+
+  const distillation = memory
+    .command("distillation")
+    .description("Explicit sequential distillation runs");
+  distillation
+    .command("run")
+    .description("Run L1->L2->L3 distillation for a session")
+    .option("--api-key-id <id>", "Target API key (management only)")
+    .option("--session <id>", "Session id to distill (required)")
+    .option("--layers <list>", "Comma-separated layers (l1,l2,l3)", "l1,l2,l3")
+    .option("--wait", "Poll until the run reaches a terminal status")
+    .option("--timeout <ms>", "Total wait budget in ms (default 180000)", String, "180000")
+    .action(runDistillationRun);
 
   const dlq = memory.command("dlq").description("Inspect and retry distillation failures");
   dlq

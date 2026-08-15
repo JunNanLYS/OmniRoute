@@ -234,6 +234,68 @@ export function getDistillationTask(taskId: string): DistillationTask | null {
   return row ? rowToTask(row) : null;
 }
 
+/**
+ * Owner-scoped task listing for the explicit distillation run: per-layer
+ * evidence and post-run diagnostics. Ordered by creation (oldest first) so
+ * callers can reconstruct execution order.
+ */
+export function listDistillationTasks(
+  options: {
+    scope?: string;
+    kinds?: DistillationTaskKind[];
+    statuses?: DistillationTaskStatus[];
+    limit?: number;
+  } = {}
+): DistillationTask[] {
+  const clauses: string[] = ["deleted_at IS NULL"];
+  const params: unknown[] = [];
+  if (options.scope) {
+    clauses.push("scope = ?");
+    params.push(options.scope);
+  }
+  if (options.kinds?.length) {
+    clauses.push(`kind IN (${options.kinds.map(() => "?").join(", ")})`);
+    params.push(...options.kinds);
+  }
+  if (options.statuses?.length) {
+    clauses.push(`status IN (${options.statuses.map(() => "?").join(", ")})`);
+    params.push(...options.statuses);
+  }
+  const limit = Math.min(500, Math.max(1, Math.floor(options.limit ?? 200)));
+  params.push(limit);
+  const rows = getMemoryDbInstance()
+    .prepare(
+      `SELECT * FROM task_queue WHERE ${clauses.join(" AND ")}
+       ORDER BY created_at ASC, task_id ASC LIMIT ?`
+    )
+    .all(...params) as TaskRow[];
+  return rows.map(rowToTask);
+}
+
+/**
+ * Pull queued tasks of the given kinds for a scope forward to "due now".
+ * The explicit distillation run uses this to bypass background debounce
+ * cadences (L1 idle window, L2 scene debounce) without altering them for
+ * the background worker.
+ */
+export function expediteDistillationTasks(
+  scope: string,
+  kinds: readonly DistillationTaskKind[],
+  now: number
+): number {
+  if (!scope.trim() || kinds.length === 0) return 0;
+  const db = getMemoryDbInstance();
+  const result = db
+    .prepare(
+      `UPDATE task_queue
+       SET not_before = MIN(not_before, ?), version = version + 1, updated_at = ?
+       WHERE scope = ? AND status = 'queued' AND deleted_at IS NULL
+         AND kind IN (${kinds.map(() => "?").join(", ")}) AND not_before > ?`
+    )
+    .run(now, now, scope, ...kinds, now);
+  return Number(result.changes);
+}
+
 export function getDistillationTaskResult(taskId: string): DistillationTaskResult | null {
   const row = getMemoryDbInstance()
     .prepare(
@@ -398,7 +460,11 @@ export interface CreateDistillationStoreOptions {
 class SqliteDistillationStore implements DistillationStore {
   constructor(private readonly applyResult: DistillationResultApplier) {}
 
-  async claimNextTask(now: number, scope: string | null): Promise<ClaimResult> {
+  async claimNextTask(
+    now: number,
+    scope: string | null,
+    kinds?: readonly DistillationTaskKind[]
+  ): Promise<ClaimResult> {
     const db = getMemoryDbInstance();
     // Recover work abandoned by a crashed process after its lease expires.
     db.prepare(
@@ -415,6 +481,10 @@ class SqliteDistillationStore implements DistillationStore {
     if (scope !== null) {
       scopeClause = "AND scope = ?";
       params.push(scope);
+    }
+    if (kinds?.length) {
+      scopeClause += ` AND kind IN (${kinds.map(() => "?").join(", ")})`;
+      params.push(...kinds);
     }
     const row = db
       .prepare(

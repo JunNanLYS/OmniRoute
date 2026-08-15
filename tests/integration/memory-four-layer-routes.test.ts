@@ -16,6 +16,9 @@ const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const settingsDb = await import("../../src/lib/db/settings.ts");
 const dependencies = await import("../../src/memory/api/dependencies.ts");
 const distillation = await import("../../src/memory/db/repositories/distillation.ts");
+const l1Scheduling = await import("../../src/memory/integration/l1Scheduling.ts");
+const distillationApply = await import("../../src/memory/distillation/apply.ts");
+const distillationRun = await import("../../src/memory/distillation/run.ts");
 const { createFourLayerService } = await import("../../src/memory/db/service.ts");
 
 await settingsDb.updateSettings({ requireLogin: false });
@@ -57,12 +60,16 @@ function configureProductionDependencies(): void {
 test.beforeEach(() => {
   wipeMemoryDb();
   configureProductionDependencies();
+  distillationRun.__resetDistillationRunsForTests();
+  distillationRun.resetDistillationRunDepsForTesting();
 });
 
 test.after(() => {
   dependencies.resetFourLayerServiceForTesting();
   dependencies.resetAuditWriterForTesting();
   dependencies.resetProviderModelValidatorForTesting();
+  distillationRun.__resetDistillationRunsForTests();
+  distillationRun.resetDistillationRunDepsForTesting();
   memoryCore.resetMemoryDbInstance();
   dbCore.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
@@ -779,4 +786,319 @@ test("pipeline settings can be enabled per API key and reset to fallback", async
   assert.equal(resetData.captureEnabled, false);
   assert.equal(resetData.injectionEnabled, false);
   assert.equal(resetData.sourceLayer, "default");
+});
+
+// ── Explicit distillation run (evaluation control plane) ──────────────────────
+
+interface RunLayerStateAssertion {
+  layer: string;
+  status: string;
+}
+
+const RUN_L1_RESULT = {
+  scenes: [
+    {
+      sceneName: "project",
+      messageIds: [],
+      memories: [
+        {
+          content: "Uses TypeScript for all new services",
+          type: "work_fact",
+          priority: 80,
+          sourceMessageIds: [],
+          metadata: {},
+        },
+      ],
+    },
+  ],
+};
+
+const RUN_L2_RESULT = {
+  summary: "Project tooling context",
+  content: "The owner builds services with TypeScript.",
+  heat: 0.6,
+  tags: ["typescript"],
+  personaUpdateRequested: true,
+};
+
+const RUN_L3_RESULT = {
+  content: "Distilled persona: prefers concise TypeScript guidance",
+  promptMode: "chat",
+};
+
+type FailLayer = "l1" | "l2" | "l3";
+
+function makeRunDeps(failLayer?: FailLayer): distillationRun.DistillationRunDeps {
+  const handlerFor = (
+    layer: FailLayer,
+    payload: unknown
+  ): ((args: { task: { kind: string } }) => Promise<unknown>) => {
+    const fail = failLayer === layer;
+    return async () =>
+      fail
+        ? { ok: false, error: { kind: "parse_failed", message: "forced fixture failure" } }
+        : {
+            ok: true,
+            result: { payload, fallbackEvidence: [], promptTokens: 10, completionTokens: 5 },
+          };
+  };
+  return {
+    store: distillation.createDistillationStore(),
+    enqueueTask: distillation.enqueueDistillationTask,
+    planL1Task: l1Scheduling.planPendingL1Task,
+    expediteQueuedTasks: distillation.expediteDistillationTasks,
+    listTasks: distillation.listDistillationTasks,
+    listDlqEntries: distillation.listDistillationDlqEntries,
+    buildL3Task: distillationApply.buildL3PersonaTask,
+    executor: {
+      breaker: { isOpen: async () => ({ open: false, retryAfterMs: 0 }) },
+    } as never,
+    selector: {
+      env: {},
+      resolvePerKeySettings: async () => null,
+      resolveGlobalSettings: async () => ({ provider: null, model: null }),
+      loadCatalogSnapshot: async () => ({
+        providers: new Map([["mock", ["mock-model"]]]),
+        isModelUsable: (provider: string, model: string) =>
+          provider === "mock" && model === "mock-model",
+      }),
+    },
+    handlers: {
+      L1_extract: handlerFor("l1", RUN_L1_RESULT) as never,
+      L2_scene: handlerFor("l2", RUN_L2_RESULT) as never,
+      L3_persona: handlerFor("l3", RUN_L3_RESULT) as never,
+    },
+    env: {},
+  };
+}
+
+async function seedL0Session(sessionId: string, turns: number): Promise<void> {
+  const l0Route = await import("../../src/app/api/memory/l0/route.ts");
+  const items: Array<{ idempotencyKey: string; role: string; content: string }> = [];
+  for (let index = 0; index < turns; index++) {
+    items.push({
+      idempotencyKey: `${sessionId}:user:${index}`,
+      role: "user",
+      content: `User turn ${index}: please remember my TypeScript preference`,
+    });
+    items.push({
+      idempotencyKey: `${sessionId}:assistant:${index}`,
+      role: "assistant",
+      content: `Assistant turn ${index}: noted`,
+    });
+  }
+  const response = await l0Route.POST(
+    new Request("http://localhost/api/memory/l0", {
+      method: "POST",
+      headers: selfHeaders(),
+      body: JSON.stringify({ sessionId, items }),
+    })
+  );
+  assert.equal(response.status, 201);
+}
+
+async function startRunAndWait(
+  body: Record<string, unknown>,
+  headers: Headers,
+  deps: distillationRun.DistillationRunDeps
+): Promise<{ accepted: Record<string, unknown>; record: Record<string, unknown> }> {
+  distillationRun.setDistillationRunDepsForTesting(() => deps);
+  const route = await import("../../src/app/api/memory/distillation/run/route.ts");
+  const response = await route.POST(
+    new Request("http://localhost/api/memory/distillation/run", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    })
+  );
+  assert.equal(response.status, 202);
+  const accepted = (await response.json()) as Record<string, unknown>;
+  assert.ok(typeof accepted.runId === "string" && accepted.runId.length > 0);
+  await distillationRun.whenDistillationRunSettles(String(accepted.runId));
+
+  const statusRoute = await import("../../src/app/api/memory/distillation/run/[runId]/route.ts");
+  const status = await statusRoute.GET(
+    new Request(`http://localhost/api/memory/distillation/run/${accepted.runId}`, { headers }),
+    { params: Promise.resolve({ runId: String(accepted.runId) }) }
+  );
+  assert.equal(status.status, 200);
+  return { accepted, record: ((await status.json()) as { data: Record<string, unknown> }).data };
+}
+
+test("distillation run route enforces auth, owner scope, and strict body", async () => {
+  const route = await import("../../src/app/api/memory/distillation/run/route.ts");
+  const post = (headers: Headers, body: unknown, query = "") => {
+    headers.set("content-type", "application/json");
+    return route.POST(
+      new Request(`http://localhost/api/memory/distillation/run${query}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      })
+    );
+  };
+
+  const anonymous = await post(new Headers(), { session: "s1" });
+  assert.equal(anonymous.status, 401);
+
+  const crossOwner = await post(selfHeaders(), { session: "s1" }, `?apiKeyId=other-owner`);
+  assert.equal(crossOwner.status, 403);
+
+  const missingSession = await post(selfHeaders(), {});
+  assert.equal(missingSession.status, 400);
+
+  const unknownLayer = await post(selfHeaders(), { session: "s1", layers: ["l9"] });
+  assert.equal(unknownLayer.status, 400);
+
+  const unknownField = await post(selfHeaders(), { session: "s1", apiKeyId: selfRecord.id });
+  assert.equal(unknownField.status, 400);
+});
+
+test("distillation run executes layers sequentially and persists L1 through L3", async () => {
+  await seedL0Session("run-session-ok", 2);
+  const { accepted, record } = await startRunAndWait(
+    { session: "run-session-ok", layers: ["l1", "l2", "l3"] },
+    selfHeaders(),
+    makeRunDeps()
+  );
+
+  assert.equal(accepted.status, "running");
+  assert.equal(accepted.statusUrl, `/api/memory/distillation/run/${String(accepted.runId)}`);
+  assert.equal(record.status, "succeeded");
+  assert.deepEqual(
+    (record.layerStates as RunLayerStateAssertion[]).map((state) => state.layer),
+    ["l1", "l2", "l3"]
+  );
+  for (const state of record.layerStates as RunLayerStateAssertion[] & { taskIds: string[] }[]) {
+    assert.equal(state.status, "succeeded");
+    assert.ok(state.taskIds.length >= 1, `layer ${state.layer} must record task evidence`);
+  }
+
+  const l1Route = await import("../../src/app/api/memory/l1/route.ts");
+  const l1Listed = await l1Route.GET(
+    new Request("http://localhost/api/memory/l1", { headers: selfHeaders() })
+  );
+  const l1Data = (
+    (await l1Listed.json()) as { data: Array<{ content: string; sceneName: string }> }
+  ).data;
+  assert.equal(l1Data.length, 1);
+  assert.equal(l1Data[0]?.content, "Uses TypeScript for all new services");
+  assert.equal(l1Data[0]?.sceneName, "project");
+
+  const l2Route = await import("../../src/app/api/memory/l2/route.ts");
+  const l2Listed = await l2Route.GET(
+    new Request("http://localhost/api/memory/l2", { headers: selfHeaders() })
+  );
+  const l2Data = (
+    (await l2Listed.json()) as { data: Array<{ sceneName: string; summary: string }> }
+  ).data;
+  assert.equal(l2Data.length, 1);
+  assert.equal(l2Data[0]?.sceneName, "project");
+  assert.equal(l2Data[0]?.summary, "Project tooling context");
+
+  const l3Route = await import("../../src/app/api/memory/l3/route.ts");
+  const l3Listed = await l3Route.GET(
+    new Request("http://localhost/api/memory/l3", { headers: selfHeaders() })
+  );
+  const l3Data = ((await l3Listed.json()) as { data: Array<{ content: string }> }).data;
+  assert.equal(l3Data.length, 1);
+  assert.equal(l3Data[0]?.content, "Distilled persona: prefers concise TypeScript guidance");
+
+  // Every request mints a fresh run id — a rerun is a new run, never a resume.
+  const second = await startRunAndWait({ session: "run-session-ok" }, selfHeaders(), makeRunDeps());
+  assert.notEqual(second.accepted.runId, accepted.runId);
+});
+
+test("distillation run terminates dependent layers on L1 failure with DLQ evidence", async () => {
+  await seedL0Session("run-session-fail-l1", 1);
+  const { record } = await startRunAndWait(
+    { session: "run-session-fail-l1" },
+    selfHeaders(),
+    makeRunDeps("l1")
+  );
+
+  assert.equal(record.status, "failed");
+  const states = record.layerStates as Array<
+    RunLayerStateAssertion & { taskIds: string[]; error: { kind: string; message: string } | null }
+  >;
+  assert.equal(states[0]?.layer, "l1");
+  assert.equal(states[0]?.status, "failed");
+  assert.equal(states[0]?.error?.kind, "parse_failed");
+  assert.equal(states[1]?.layer, "l2");
+  assert.equal(states[1]?.status, "skipped");
+  assert.equal(states[2]?.layer, "l3");
+  assert.equal(states[2]?.status, "skipped");
+
+  // Exactly one L1 task executed — no automatic retries inside the run.
+  assert.equal(states[0]?.taskIds.length, 1);
+  const failedTask = distillation.getDistillationTask(String(states[0]?.taskIds[0]));
+  assert.equal(failedTask?.status, "failed_dlq");
+
+  const evidence = record.evidence as {
+    tasks: Array<{ id: string; kind: string; status: string }>;
+    dlq: Array<{ taskId: string; failureKind: string }>;
+  };
+  assert.ok(evidence.tasks.some((task) => task.id === states[0]?.taskIds[0]));
+  assert.ok(
+    evidence.dlq.some(
+      (entry) => entry.taskId === states[0]?.taskIds[0] && entry.failureKind === "parse_failed"
+    )
+  );
+});
+
+test("distillation run keeps L1 output when only L2 fails", async () => {
+  await seedL0Session("run-session-fail-l2", 1);
+  const { record } = await startRunAndWait(
+    { session: "run-session-fail-l2", layers: ["l1", "l2", "l3"] },
+    selfHeaders(),
+    makeRunDeps("l2")
+  );
+
+  assert.equal(record.status, "failed");
+  const states = record.layerStates as RunLayerStateAssertion[];
+  assert.deepEqual(
+    states.map((state) => state.status),
+    ["succeeded", "failed", "skipped"]
+  );
+
+  const l1Route = await import("../../src/app/api/memory/l1/route.ts");
+  const l1Listed = await l1Route.GET(
+    new Request("http://localhost/api/memory/l1", { headers: selfHeaders() })
+  );
+  assert.equal(((await l1Listed.json()) as { data: unknown[] }).data.length, 1);
+});
+
+test("distillation run status is owner-scoped and management can target other keys", async () => {
+  await seedL0Session("run-session-scoped", 1);
+  distillationRun.setDistillationRunDepsForTesting(() => makeRunDeps());
+
+  const route = await import("../../src/app/api/memory/distillation/run/route.ts");
+  const targeted = await route.POST(
+    new Request(`http://localhost/api/memory/distillation/run?apiKeyId=${selfRecord.id}`, {
+      method: "POST",
+      headers: managementHeaders(),
+      body: JSON.stringify({ session: "run-session-scoped" }),
+    })
+  );
+  assert.equal(targeted.status, 202);
+  const accepted = (await targeted.json()) as { runId: string };
+  await distillationRun.whenDistillationRunSettles(accepted.runId);
+
+  const statusRoute = await import("../../src/app/api/memory/distillation/run/[runId]/route.ts");
+  const statusRequest = (headers: Headers) =>
+    statusRoute.GET(
+      new Request(`http://localhost/api/memory/distillation/run/${accepted.runId}`, { headers }),
+      { params: Promise.resolve({ runId: accepted.runId }) }
+    );
+
+  // The self caller owns the run (management targeted its key), so it can read it.
+  assert.equal((await statusRequest(selfHeaders())).status, 200);
+  assert.equal((await statusRequest(managementHeaders())).status, 200);
+  const unknown = await statusRoute.GET(
+    new Request("http://localhost/api/memory/distillation/run/not-a-run", {
+      headers: selfHeaders(),
+    }),
+    { params: Promise.resolve({ runId: "not-a-run" }) }
+  );
+  assert.equal(unknown.status, 404);
 });
