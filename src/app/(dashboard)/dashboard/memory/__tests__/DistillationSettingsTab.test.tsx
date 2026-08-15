@@ -2,6 +2,7 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "@testing-library/jest-dom/vitest";
 
 const notifications = { success: vi.fn(), error: vi.fn(), info: vi.fn() };
 vi.mock("@/store/notificationStore", () => ({ useNotificationStore: () => notifications }));
@@ -234,7 +235,7 @@ describe("DistillationSettingsTab", () => {
       "Saved global settings"
     );
     expect(container.querySelector("[data-testid='distillation-worker-interval']")).toHaveValue(
-      "120"
+      120
     );
 
     await act(async () => {
