@@ -113,11 +113,15 @@ async function executeFixture(
   });
 
   try {
+    // Stage 0 — mint this fixture's own subject owner: L1/L2/L3, the L2
+    // scene budget, and the L3 persona singleton stay isolated per suite.
+    const subject = await seed.createSubject();
+
     // Stage 1 — canonical L0 history import (monotonic importer timestamps,
     // one hour in the past so the captured gateway turn always sorts last).
     await importFixtureHistory({
       baseUrl: server.baseUrl,
-      apiKey: seed.subjectKey,
+      apiKey: subject.key,
       sessionId,
       history: fixture.history,
       timestampBase: Date.now() - 3_600_000,
@@ -126,7 +130,7 @@ async function executeFixture(
     // Stage 2 — real gateway turn for finalUser (capture is async).
     const turn = await sendFinalUserTurn({
       baseUrl: server.baseUrl,
-      apiKey: seed.subjectKey,
+      apiKey: subject.key,
       model: seed.gatewayModel,
       sessionId,
       content: fixture.finalUser,
@@ -137,7 +141,7 @@ async function executeFixture(
 
     const rows = await waitL0Capture(
       server.baseUrl,
-      seed.subjectKey,
+      subject.key,
       sessionId,
       fixture.history.length + 2,
       config
@@ -147,11 +151,11 @@ async function executeFixture(
     const judgeRows = await listMemory<GateL0Row>(server.baseUrl, seed.judgeKey, "l0");
     const l1Rows = await listMemory<{ sourceMessageIds: string[] }>(
       server.baseUrl,
-      seed.subjectKey,
+      subject.key,
       "l1"
     );
     const gate = evaluateL0Gate({
-      ownerApiKeyId: seed.subjectKeyId,
+      ownerApiKeyId: subject.id,
       sessionId,
       rows,
       history: fixture.history,
@@ -174,7 +178,7 @@ async function executeFixture(
     // Stage 4 — explicit sequential distillation run.
     const run = await runExplicitDistillation({
       baseUrl: server.baseUrl,
-      apiKey: seed.subjectKey,
+      apiKey: subject.key,
       sessionId,
       layerTimeoutMs: config.runLayerTimeoutMs,
       pollMs: config.runPollMs,
@@ -204,15 +208,15 @@ async function executeFixture(
     }
 
     // Stage 5 — structural layer assertions (semantic judging is live-only).
-    const l2Rows = await listMemory<{ id: string }>(server.baseUrl, seed.subjectKey, "l2");
+    const l2Rows = await listMemory<{ id: string }>(server.baseUrl, subject.key, "l2");
     const l3Rows = await listMemory<{ id: string; content: string }>(
       server.baseUrl,
-      seed.subjectKey,
+      subject.key,
       "l3"
     );
     const finalL1 = await listMemory<{ sourceMessageIds: string[] }>(
       server.baseUrl,
-      seed.subjectKey,
+      subject.key,
       "l1"
     );
     const structureFailures: string[] = [];
@@ -225,7 +229,7 @@ async function executeFixture(
     if (l2Rows.length < 1) structureFailures.push("L2 produced no scenes");
     if (l3Rows.length < 1 || !l3Rows[0]?.content) structureFailures.push("L3 persona missing");
     const finalGate = evaluateL0Gate({
-      ownerApiKeyId: seed.subjectKeyId,
+      ownerApiKeyId: subject.id,
       sessionId,
       rows,
       history: fixture.history,

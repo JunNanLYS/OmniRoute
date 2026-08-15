@@ -192,6 +192,95 @@ test("mock outputs derive per-session content so fixtures stay distinct", async 
   assert.notEqual(l3A.content, l3B.content);
 });
 
+test("mock L1 splits long conversations into two distinct scenes", async () => {
+  const mock = await import("../../scripts/memory-e2e/mockUpstream.ts");
+
+  // A typical single-topic suite: three history user turns + the final
+  // gateway turn = four user lines — stays single-scene.
+  const short = [
+    "user: 主题甲第一句。",
+    "assistant: 好。",
+    "user: 主题甲第二句。",
+    "assistant: 记下。",
+    "user: 整理一下。",
+    "assistant: 好。",
+  ].join("\n");
+  const shortScenes = JSON.parse(mock.buildMockAssistantText("l1", short)) as Array<{
+    scene_name: string;
+  }>;
+  assert.equal(shortScenes.length, 1, "four user lines (3 history + final) stay single-scene");
+
+  // A multi-topic suite: four history user turns + final = five lines —
+  // splits at the midpoint into two scenes.
+  const long = [
+    "user: 支付迁移任务启动，先做双写方案。",
+    "assistant: 已记录任务状态。",
+    "user: 双写完成，开始灰度切流。",
+    "assistant: 任务推进中。",
+    "user: 另外报表重构任务也立项了，负责人是王磊。",
+    "assistant: 已记录第二个任务。",
+    "user: 报表重构先用临时表跑数，不动主表。",
+    "assistant: 明白。",
+    "user: 汇总一下两个任务。",
+    "assistant: 好。",
+  ].join("\n");
+  const scenes = JSON.parse(mock.buildMockAssistantText("l1", long)) as Array<{
+    scene_name: string;
+    memories: Array<{ content: string }>;
+  }>;
+  assert.equal(scenes.length, 2, "five user lines split into two scenes");
+  assert.notEqual(scenes[0]?.scene_name, scenes[1]?.scene_name);
+  assert.ok(scenes[0]!.memories.length >= 1);
+  assert.ok(scenes[1]!.memories.length >= 1);
+  assert.ok(scenes[0]!.memories.some((memory) => memory.content.includes("支付迁移")));
+  assert.ok(scenes[1]!.memories.some((memory) => memory.content.includes("报表重构")));
+});
+
+// ── Subject key factory (per-fixture owner isolation) ────────────────────────
+
+test("createSubjectKey mints an isolated owner with capture enabled per call", async () => {
+  const seed = await import("../../scripts/memory-e2e/seed.ts");
+  const calls: Array<{ method: string; path: string; bearer: string | null; body: unknown }> = [];
+  let seq = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const headers = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
+    calls.push({
+      method: String(init?.method ?? "GET"),
+      path: url.pathname,
+      bearer: headers.get("authorization"),
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+    });
+    seq += 1;
+    if (url.pathname === "/api/keys") {
+      return new Response(JSON.stringify({ key: `sk-test-${seq}`, id: `key-id-${seq}` }), {
+        status: 201,
+      });
+    }
+    if (url.pathname === "/api/memory/pipeline-settings") {
+      return new Response(
+        JSON.stringify({ data: { captureEnabled: true, injectionEnabled: true } }),
+        { status: 200 }
+      );
+    }
+    return new Response("{}", { status: 404 });
+  }) as typeof fetch;
+  try {
+    const first = await seed.createSubjectKey("http://localhost", "subject-a", []);
+    const second = await seed.createSubjectKey("http://localhost", "subject-b", []);
+    assert.notEqual(first.id, second.id);
+    assert.notEqual(first.key, second.key);
+    const puts = calls.filter((call) => call.path === "/api/memory/pipeline-settings");
+    assert.equal(puts.length, 2, "each subject must enable its own pipeline");
+    assert.equal(puts[0]?.bearer, `Bearer ${first.key}`);
+    assert.equal(puts[1]?.bearer, `Bearer ${second.key}`);
+    assert.deepEqual(puts[0]?.body, { captureEnabled: true, injectionEnabled: true });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 // ── L0 gate ──────────────────────────────────────────────────────────────────
 
 interface GateRow {

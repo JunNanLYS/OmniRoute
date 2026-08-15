@@ -1,8 +1,8 @@
 /**
  * Seeding for the smoke profile: provider node + connection against the
  * loopback mock upstream, model sync, deterministic distillation selector,
- * and the subject/judge API keys. All through product APIs — no direct DB
- * access, no browser.
+ * the management/judge API keys, and a per-fixture subject-key factory. All
+ * through product APIs — no direct DB access, no browser.
  *
  * Auth note: the server boots in "open" bootstrap mode (no password), so
  * loopback management calls (provider-nodes/providers/keys) pass during the
@@ -15,16 +15,26 @@ import { MOCK_MODEL_ID } from "./mockUpstream.ts";
 
 export const MOCK_NODE_PREFIX = "mock";
 
+export interface SeededKey {
+  id: string;
+  key: string;
+}
+
 export interface SeedResult {
   nodeId: string;
   connectionId: string;
   managementKeyId: string;
   /** Plaintext keys — NEVER written to reports (masked via `maskedSeedSummary`). */
   managementKey: string;
-  subjectKeyId: string;
-  subjectKey: string;
   judgeKeyId: string;
   judgeKey: string;
+  /**
+   * Mint a fresh subject owner for one fixture. Every fixture gets its own
+   * key (capture+injection enabled on it), so L1/L2/L3 rows, the L2 scene
+   * budget (15/owner), and the L3 persona singleton are fully isolated
+   * between suites — no cross-fixture eviction or overwrite.
+   */
+  createSubject(): Promise<SeededKey>;
   selectorModel: string;
   gatewayModel: string;
   log: string[];
@@ -39,7 +49,6 @@ export function maskedSeedSummary(seed: SeedResult): Record<string, unknown> {
     gatewayModel: seed.gatewayModel,
     keys: {
       management: { id: seed.managementKeyId, value: mask(seed.managementKey) },
-      subject: { id: seed.subjectKeyId, value: mask(seed.subjectKey) },
       judge: { id: seed.judgeKeyId, value: mask(seed.judgeKey) },
     },
     steps: seed.log,
@@ -51,7 +60,7 @@ async function createKey(
   name: string,
   log: string[],
   scopes?: string[]
-): Promise<{ id: string; key: string }> {
+): Promise<SeededKey> {
   const response = await httpJson<{ key?: string; id?: string }>(`${baseUrl}/api/keys`, {
     method: "POST",
     body: JSON.stringify({ name, ...(scopes ? { scopes } : {}) }),
@@ -63,6 +72,30 @@ async function createKey(
   }
   log.push(`created api key ${name} (${response.body.id})`);
   return { id: response.body.id, key: response.body.key };
+}
+
+/**
+ * Mint one subject key and enable memory capture + injection on it. Used
+ * per fixture so each suite distills into its own owner partition.
+ */
+export async function createSubjectKey(
+  baseUrl: string,
+  name: string,
+  log: string[]
+): Promise<SeededKey> {
+  const subject = await createKey(baseUrl, name, log);
+  const pipelinePut = await httpJson(`${baseUrl}/api/memory/pipeline-settings`, {
+    method: "PUT",
+    bearer: subject.key,
+    body: JSON.stringify({ captureEnabled: true, injectionEnabled: true }),
+  });
+  if (!pipelinePut.ok) {
+    throw new Error(
+      `seed: failed to enable subject pipeline for ${name}: HTTP ${pipelinePut.status} ${JSON.stringify(pipelinePut.body).slice(0, 300)}`
+    );
+  }
+  log.push(`subject ${name}: capture=on injection=on`);
+  return subject;
 }
 
 export async function seedSmokeTarget(options: {
@@ -171,22 +204,15 @@ export async function seedSmokeTarget(options: {
   }
   push(`pinned global distillation selector to ${nodeId}/${MOCK_MODEL_ID}`);
 
-  // 5. Subject + judge keys. Subject gets capture+injection; the judge key
-  //    keeps both disabled (it must never feed the memory it judges).
-  const subject = await createKey(baseUrl, "memory-e2e-subject", log);
+  // 5. Judge key (capture/injection stay disabled — it must never feed the
+  //    memory it judges) + the per-fixture subject factory.
   const judge = await createKey(baseUrl, "memory-e2e-judge", log);
-
-  const pipelinePut = await httpJson(`${baseUrl}/api/memory/pipeline-settings`, {
-    method: "PUT",
-    bearer: subject.key,
-    body: JSON.stringify({ captureEnabled: true, injectionEnabled: true }),
-  });
-  if (!pipelinePut.ok) {
-    throw new Error(
-      `seed: failed to enable subject pipeline: HTTP ${pipelinePut.status} ${JSON.stringify(pipelinePut.body)}`
-    );
-  }
-  push("subject pipeline: capture=on injection=on; judge pipeline: default (off)");
+  let subjectSeq = 0;
+  const createSubject = async (): Promise<SeededKey> => {
+    subjectSeq += 1;
+    return createSubjectKey(baseUrl, `memory-e2e-subject-${subjectSeq}`, log);
+  };
+  push("subject factory ready (per-fixture owners); judge pipeline: default (off)");
 
   await sleep(100);
   return {
@@ -194,10 +220,9 @@ export async function seedSmokeTarget(options: {
     connectionId,
     managementKeyId: management.id,
     managementKey: management.key,
-    subjectKeyId: subject.id,
-    subjectKey: subject.key,
     judgeKeyId: judge.id,
     judgeKey: judge.key,
+    createSubject,
     selectorModel: `${MOCK_NODE_PREFIX}/${MOCK_MODEL_ID}`,
     gatewayModel: `${MOCK_NODE_PREFIX}/${MOCK_MODEL_ID}`,
     log,
