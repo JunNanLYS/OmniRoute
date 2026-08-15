@@ -59,16 +59,30 @@ function userLinesFromConversation(conversation: string): string[] {
 }
 
 /**
- * Scene name for the L1 result: the opening phrase of the session's first
- * user turn. Distinct sessions must land in distinct scenes — applyL1 keys
- * L2 work and coalescing on the scene name, so a shared canned name would
- * funnel every fixture into one scene row. Clamped to the apply-side 240
- * character limit.
+ * Scene name for an L1 scene: the opening phrase of its source user turn.
+ * Distinct sessions (and distinct scenes within one session) must use
+ * distinct names — applyL1 keys L2 work and coalescing on the scene name.
+ * Clamped to the apply-side 240 character limit.
  */
-function sceneNameFromConversation(conversation: string): string {
-  const first = userLinesFromConversation(conversation)[0] ?? "项目会话";
-  const clipped = first.slice(0, 24).replace(/[，。：；、\s]+$/u, "");
+function sceneNameFromText(text: string): string {
+  const clipped = text.slice(0, 24).replace(/[，。：；、\s]+$/u, "");
   return clipped.length > 0 ? clipped : "项目会话";
+}
+
+/**
+ * Split a conversation's user turns into one or two scene groups. The
+ * conversation includes the final gateway turn, so a session with three
+ * history user turns carries four user lines; the split threshold is five
+ * lines (= four history turns), which keeps typical single-topic suites in
+ * one scene and splits genuinely multi-topic sessions (the case-03 domain).
+ */
+function sceneGroupsFromConversation(conversation: string): string[][] {
+  const users = userLinesFromConversation(conversation);
+  if (users.length < 5) {
+    return [users.length > 0 ? users : ["用户提供了一条新的项目事实。"]];
+  }
+  const midpoint = Math.ceil(users.length / 2);
+  return [users.slice(0, midpoint), users.slice(midpoint)];
 }
 
 /**
@@ -91,31 +105,20 @@ function sceneNameFromConversation(conversation: string): string {
 export function buildMockAssistantText(kind: MockCallKind, conversation = ""): string {
   switch (kind) {
     case "l1": {
-      const users = userLinesFromConversation(conversation);
-      const first = users[0] ?? "用户提供了一条新的项目事实。";
-      const second = users[1] ?? "用户补充了一条新的工程约定。";
-      return JSON.stringify([
-        {
-          scene_name: sceneNameFromConversation(conversation),
-          message_ids: [],
-          memories: [
-            {
-              content: first.slice(0, 200),
-              type: "work_fact",
-              priority: 80,
-              source_message_ids: [],
-              metadata: {},
-            },
-            {
-              content: second.slice(0, 200),
-              type: "work_fact",
-              priority: 75,
-              source_message_ids: [],
-              metadata: {},
-            },
-          ],
-        },
-      ]);
+      // Each scene group derives its name from its first user turn and
+      // carries its first two turns as memories.
+      const scenes = sceneGroupsFromConversation(conversation).map((turns) => ({
+        scene_name: sceneNameFromText(turns[0] ?? "项目会话"),
+        message_ids: [],
+        memories: turns.slice(0, 2).map((turn, index) => ({
+          content: turn.slice(0, 200),
+          type: "work_fact",
+          priority: index === 0 ? 80 : 75,
+          source_message_ids: [],
+          metadata: {},
+        })),
+      }));
+      return JSON.stringify(scenes);
     }
     case "l2": {
       // applyL1 joins the session's memories as "type: content" lines.
