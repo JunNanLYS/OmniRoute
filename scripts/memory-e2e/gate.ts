@@ -38,9 +38,21 @@ export interface L0GateInput {
   requestedModel: string;
   /** Model reported by the gateway response. */
   gatewayModel: string;
-  l1Rows: Array<{ sourceMessageIds: string[] }>;
+  /**
+   * L1 memories of the owner. Only rows whose `metadata.sessionId` matches
+   * the fixture session count as distillation evidence for THIS fixture:
+   * the harness reuses one owner across suites, so other sessions' L1 rows
+   * legitimately reference L0 ids absent from this session and must not
+   * fail the check.
+   */
+  l1Rows: GateL1Row[];
   /** L0 row count visible to the judge key (capture disabled — must be 0). */
   judgeRowCount: number;
+}
+
+export interface GateL1Row {
+  sourceMessageIds: string[];
+  metadata?: { sessionId?: string | null };
 }
 
 export interface L0GateCheck {
@@ -249,9 +261,10 @@ export function evaluateL0Gate(input: L0GateInput): L0GateResult {
     )
   );
 
-  // 10. L1 references real L0 message ids.
+  // 10. L1 references real L0 message ids (scoped to this session only).
   const l0Ids = new Set(rows.map((row) => row.id));
-  const dangling = input.l1Rows.flatMap((row) =>
+  const sessionL1Rows = input.l1Rows.filter((row) => row.metadata?.sessionId === input.sessionId);
+  const dangling = sessionL1Rows.flatMap((row) =>
     row.sourceMessageIds.filter((id) => !l0Ids.has(id))
   );
   checks.push(

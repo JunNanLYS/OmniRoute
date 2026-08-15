@@ -25,6 +25,26 @@ test("parseFixture accepts the real case-01 fixture and preserves judge fields",
   assert.ok(fixture.rubrics.l1.length > 0);
 });
 
+test("all shipped memory-e2e fixtures parse and have unique judge-ready ids", async () => {
+  const { loadFixtures } = await import("../../scripts/memory-e2e/types.ts");
+  const fixtures = await loadFixtures(FIXTURES_DIR);
+  const ids = fixtures.map((fixture) => fixture.id);
+  assert.ok(ids.includes("01"), "case-01 must be present");
+  assert.ok(ids.includes("02"), "case-02 must be present");
+  assert.equal(new Set(ids).size, ids.length, "fixture ids must be unique");
+  for (const fixture of fixtures) {
+    assert.ok(fixture.title.length > 0, `${fixture.id}: title required`);
+    assert.ok(fixture.history.length >= 2, `${fixture.id}: history too short`);
+    assert.equal(fixture.history.at(-1)?.role, "assistant", `${fixture.id}: must end assistant`);
+    assert.ok(fixture.finalUser.length > 0, `${fixture.id}: finalUser required`);
+    assert.ok(fixture.mandatoryPoints.length >= 1, `${fixture.id}: mandatoryPoints required`);
+    assert.ok(
+      fixture.rubrics.l1 && fixture.rubrics.l2 && fixture.rubrics.l3,
+      `${fixture.id}: rubrics l1/l2/l3 required`
+    );
+  }
+});
+
 test("parseFixture rejects structurally invalid fixtures", async () => {
   const { parseFixture } = await import("../../scripts/memory-e2e/types.ts");
   const validHistory = [
@@ -183,7 +203,10 @@ function makePassingRows(): GateRow[] {
 
 async function gate(inputs: {
   rows?: GateRow[];
-  l1Rows?: Array<{ sourceMessageIds: string[] }>;
+  l1Rows?: Array<{
+    sourceMessageIds: string[];
+    metadata?: { sessionId?: string | null };
+  }>;
   judgeRowCount?: number;
   gatewayModel?: string;
   requestedModel?: string;
@@ -227,7 +250,9 @@ test("L0 gate fails on duplicate replay, truncation, wrong model, and dangling L
   const wrongModel = await gate({ gatewayModel: "other/model" });
   assert.ok(wrongModel.failures.some((f: string) => f.includes("provider-model-match")));
 
-  const dangling = await gate({ l1Rows: [{ sourceMessageIds: ["l0_missing"] }] });
+  const dangling = await gate({
+    l1Rows: [{ sourceMessageIds: ["l0_missing"], metadata: { sessionId: "session-1" } }],
+  });
   assert.ok(dangling.failures.some((f: string) => f.includes("l1-references-l0")));
 
   const leaked = await gate({ judgeRowCount: 1 });
@@ -235,6 +260,34 @@ test("L0 gate fails on duplicate replay, truncation, wrong model, and dangling L
 
   const wrongCorrelation = await gate({ correlationId: "req-other" });
   assert.ok(wrongCorrelation.failures.some((f: string) => f.includes("correlation-traceability")));
+});
+
+test("L0 gate ignores L1 rows distilled from other sessions", async () => {
+  // Case-02 run in the same owner sees case-01's L1 rows. Those reference
+  // case-01's L0 ids, which are absent from case-02's session — they must
+  // not be treated as dangling evidence for the fixture under test.
+  const other = await gate({
+    l1Rows: [
+      {
+        sourceMessageIds: ["l0_other_session_id_1", "l0_other_session_id_2"],
+        metadata: { sessionId: "session-other" },
+      },
+    ],
+  });
+  assert.equal(
+    other.passed,
+    true,
+    `cross-session L1 must be ignored: ${JSON.stringify(other.failures)}`
+  );
+
+  // A row WITHOUT a session marker is not pipeline evidence either — it must
+  // not fail the fixture's gate.
+  const unmarked = await gate({ l1Rows: [{ sourceMessageIds: ["l0_unmarked_id"] }] });
+  assert.equal(
+    unmarked.passed,
+    true,
+    `unmarked L1 rows must be ignored: ${JSON.stringify(unmarked.failures)}`
+  );
 });
 
 test("L0 gate verifies final assistant fidelity with whitespace normalization", async () => {

@@ -49,24 +49,45 @@ export function classifyMockCall(body: unknown): MockCallKind {
   return "chat";
 }
 
-/** Canned, contract-valid model output per pipeline stage. */
-export function buildMockAssistantText(kind: MockCallKind): string {
+/** First two `user: ...` lines of a distillation conversation slice. */
+function userLinesFromConversation(conversation: string): string[] {
+  return conversation
+    .split("\n")
+    .filter((line) => line.startsWith("user: "))
+    .map((line) => line.slice("user: ".length).trim())
+    .filter(Boolean);
+}
+
+/**
+ * Canned, contract-valid model output per pipeline stage.
+ *
+ * L1 memories are derived from the request's own conversation slice (the
+ * first two user turns): the harness reuses one owner across suites, and the
+ * L1 apply pipeline keys on `sceneName + type + content`. Two fixtures that
+ * receive identical canned content would collide on the pipeline key and
+ * merge their sourceMessageIds across sessions. Deriving the content from
+ * the conversation keeps every session's L1 memories distinct.
+ */
+export function buildMockAssistantText(kind: MockCallKind, conversation = ""): string {
   switch (kind) {
-    case "l1":
+    case "l1": {
+      const users = userLinesFromConversation(conversation);
+      const first = users[0] ?? "用户提供了一条新的项目事实。";
+      const second = users[1] ?? "用户补充了一条新的工程约定。";
       return JSON.stringify([
         {
-          scene_name: "工程协作",
+          scene_name: "项目会话",
           message_ids: [],
           memories: [
             {
-              content: "团队约定：新服务统一使用 TypeScript 并启用 strict 模式。",
+              content: first.slice(0, 200),
               type: "work_fact",
               priority: 80,
               source_message_ids: [],
               metadata: {},
             },
             {
-              content: "包管理器为 pnpm，monorepo 工具为 Nx。",
+              content: second.slice(0, 200),
               type: "work_fact",
               priority: 75,
               source_message_ids: [],
@@ -75,6 +96,7 @@ export function buildMockAssistantText(kind: MockCallKind): string {
           ],
         },
       ]);
+    }
     case "l2":
       return JSON.stringify({
         summary: "工程协作约定：TypeScript strict、pnpm、Nx。",
@@ -163,7 +185,21 @@ export class MemoryMockUpstream {
 
     if (req.method === "POST" && req.url?.startsWith("/v1/chat/completions")) {
       const kind = classifyMockCall(parsed);
-      const text = buildMockAssistantText(kind);
+      const conversation =
+        typeof (parsed as { messages?: unknown }).messages === "object"
+          ? ((parsed as { messages?: unknown }).messages as unknown[])
+              .filter((m): m is { role: string; content: string } =>
+                Boolean(
+                  m &&
+                  typeof m === "object" &&
+                  (m as { role?: unknown }).role === "user" &&
+                  typeof (m as { content?: unknown }).content === "string"
+                )
+              )
+              .map((m) => m.content)
+              .join("\n")
+          : "";
+      const text = buildMockAssistantText(kind, conversation);
       const requestModel =
         typeof (parsed as { model?: unknown }).model === "string"
           ? String((parsed as { model: string }).model)
