@@ -136,6 +136,62 @@ test("buildMockAssistantText returns contract-valid JSON for every layer", async
   assert.ok(mock.buildMockAssistantText("chat").length > 0);
 });
 
+test("mock outputs derive per-session content so fixtures stay distinct", async () => {
+  const mock = await import("../../scripts/memory-e2e/mockUpstream.ts");
+
+  const convA = [
+    "user: 我们决定把支付服务迁移到 AWS，弃用自建机房。",
+    "assistant: 已记录。",
+    "user: 订单库用 PostgreSQL 16。",
+    "assistant: 明白。",
+  ].join("\n");
+  const convB = [
+    "user: 评审时优先指出类型不安全问题。",
+    "assistant: 好的。",
+    "user: 包管理用 pnpm。",
+    "assistant: 记录。",
+  ].join("\n");
+
+  // L1: scene_name and memory content follow the conversation, so each
+  // session lands in its own scene instead of one shared row.
+  const sceneA = JSON.parse(mock.buildMockAssistantText("l1", convA))[0] as {
+    scene_name: string;
+    memories: Array<{ content: string }>;
+  };
+  const sceneB = JSON.parse(mock.buildMockAssistantText("l1", convB))[0] as {
+    scene_name: string;
+    memories: Array<{ content: string }>;
+  };
+  assert.ok(sceneA.scene_name.length > 0 && sceneA.scene_name.length <= 240);
+  assert.ok(sceneB.scene_name.length > 0 && sceneB.scene_name.length <= 240);
+  assert.notEqual(sceneA.scene_name, sceneB.scene_name);
+  assert.ok(sceneA.memories[0]!.content.includes("AWS"));
+  assert.ok(sceneB.memories[0]!.content.includes("类型不安全"));
+
+  // L2: the summary follows the supplied memories (applyL1 joins them as
+  // "type: content" lines).
+  const l2A = JSON.parse(mock.buildMockAssistantText("l2", "work_fact: 支付服务迁移 AWS")) as {
+    summary: string;
+  };
+  const l2B = JSON.parse(mock.buildMockAssistantText("l2", "work_fact: 评审关注类型安全")) as {
+    summary: string;
+  };
+  assert.ok(l2A.summary.includes("AWS"));
+  assert.ok(l2B.summary.includes("类型安全"));
+  assert.notEqual(l2A.summary, l2B.summary);
+
+  // L3: the persona follows the supplied scene samples ("[scene]\nsummary\ncontent").
+  const l3A = JSON.parse(mock.buildMockAssistantText("l3", "[支付迁移]\nAWS 迁移决策\n详情一")) as {
+    content: string;
+  };
+  const l3B = JSON.parse(mock.buildMockAssistantText("l3", "[评审约定]\n类型安全优先\n详情二")) as {
+    content: string;
+  };
+  assert.ok(l3A.content.includes("AWS"));
+  assert.ok(l3B.content.includes("类型安全"));
+  assert.notEqual(l3A.content, l3B.content);
+});
+
 // ── L0 gate ──────────────────────────────────────────────────────────────────
 
 interface GateRow {

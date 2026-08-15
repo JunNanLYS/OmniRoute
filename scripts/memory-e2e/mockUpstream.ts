@@ -59,14 +59,34 @@ function userLinesFromConversation(conversation: string): string[] {
 }
 
 /**
- * Canned, contract-valid model output per pipeline stage.
+ * Scene name for the L1 result: the opening phrase of the session's first
+ * user turn. Distinct sessions must land in distinct scenes — applyL1 keys
+ * L2 work and coalescing on the scene name, so a shared canned name would
+ * funnel every fixture into one scene row. Clamped to the apply-side 240
+ * character limit.
+ */
+function sceneNameFromConversation(conversation: string): string {
+  const first = userLinesFromConversation(conversation)[0] ?? "项目会话";
+  const clipped = first.slice(0, 24).replace(/[，。：；、\s]+$/u, "");
+  return clipped.length > 0 ? clipped : "项目会话";
+}
+
+/**
+ * Canned, contract-valid model output per pipeline stage. Every stage is
+ * derived from the request's own input so distinct sessions produce
+ * distinct rows:
  *
- * L1 memories are derived from the request's own conversation slice (the
- * first two user turns): the harness reuses one owner across suites, and the
- * L1 apply pipeline keys on `sceneName + type + content`. Two fixtures that
- * receive identical canned content would collide on the pipeline key and
- * merge their sourceMessageIds across sessions. Deriving the content from
- * the conversation keeps every session's L1 memories distinct.
+ * - L1 memories come from the conversation's first two user turns; the
+ *   scene name from the first. The harness reuses one owner across suites,
+ *   and the L1 apply pipeline keys on `sceneName + type + content` —
+ *   identical canned content would collide and merge sourceMessageIds
+ *   across sessions.
+ * - L2 receives the session's memories joined as "type: content" lines; its
+ *   summary reuses the first memory so each scene's summary matches its own
+ *   content.
+ * - L3 receives scene samples as "[scene]\nsummary\ncontent" blocks; its
+ *   persona content mirrors the first sample so the final persona reflects
+ *   the fixture that wrote it last.
  */
 export function buildMockAssistantText(kind: MockCallKind, conversation = ""): string {
   switch (kind) {
@@ -76,7 +96,7 @@ export function buildMockAssistantText(kind: MockCallKind, conversation = ""): s
       const second = users[1] ?? "用户补充了一条新的工程约定。";
       return JSON.stringify([
         {
-          scene_name: "项目会话",
+          scene_name: sceneNameFromConversation(conversation),
           message_ids: [],
           memories: [
             {
@@ -97,21 +117,31 @@ export function buildMockAssistantText(kind: MockCallKind, conversation = ""): s
         },
       ]);
     }
-    case "l2":
+    case "l2": {
+      // applyL1 joins the session's memories as "type: content" lines.
+      const firstMemory = conversation
+        .split("\n")
+        .map((line) => line.replace(/^[a-z_]+:\s*/u, "").trim())
+        .find((line) => line.length > 0);
+      const summary = (firstMemory ?? "本会话摘要").slice(0, 120);
       return JSON.stringify({
-        summary: "工程协作约定：TypeScript strict、pnpm、Nx。",
-        tags: ["typescript", "pnpm", "nx"],
-        content:
-          "团队新服务统一使用 TypeScript（strict 模式），包管理用 pnpm，monorepo 用 Nx；评审优先关注类型安全与边界条件。",
+        summary,
+        tags: ["e2e"],
+        content: `本场景要点：${summary}`,
         heat: 0.7,
         persona_update_requested: true,
       });
-    case "l3":
+    }
+    case "l3": {
+      const firstBlock = conversation.split("\n---\n")[0] ?? "";
+      const [sceneLine, summaryLine] = firstBlock.split("\n");
+      const scene = (sceneLine ?? "").replace(/^\[|\]$/g, "").trim() || "项目会话";
+      const summary = (summaryLine ?? "").trim() || "用户的项目偏好。";
       return JSON.stringify({
-        content:
-          "该用户的团队约定：新服务统一使用 TypeScript 并启用 strict 模式；包管理用 pnpm；monorepo 用 Nx；代码评审优先关注类型安全与边界条件。回答代码问题时默认给出 TypeScript 示例。",
+        content: `基于「${scene}」等场景，${summary}`.slice(0, 2000),
         prompt_mode: "chat",
       });
+    }
     case "chat":
     default:
       return "已整理为团队规范：新服务统一使用 TypeScript（strict 模式）、pnpm 管理依赖、Nx 搭建 monorepo，评审优先关注类型安全与边界条件。之后的新项目默认照此执行。";
