@@ -1,0 +1,47 @@
+{
+  "id": "01",
+  "title": "工程协作偏好",
+  "domain": "Engineering collaboration preferences",
+  "history": [
+    {
+      "role": "user",
+      "content": "跟你同步一下团队约定：之后所有新服务一律用 TypeScript 写，tsconfig 开 strict 模式，不要再提交任何 JavaScript 文件。"
+    },
+    {
+      "role": "assistant",
+      "content": "已记录：新服务统一使用 TypeScript 并启用 strict 模式，不再提交 JavaScript 文件。"
+    },
+    {
+      "role": "user",
+      "content": "依赖管理统一用 pnpm，monorepo 用 Nx 搭。之前讨论过的 yarn 迁移方案只是备选，别当成结论。"
+    },
+    {
+      "role": "assistant",
+      "content": "明白：包管理器确定为 pnpm，monorepo 工具为 Nx；yarn 迁移仅为备选方案，不作为当前约定。"
+    },
+    {
+      "role": "user",
+      "content": "代码评审时请优先指出类型不安全和边界条件问题，风格问题除非影响可读性否则不用提。"
+    },
+    {
+      "role": "assistant",
+      "content": "好的：评审优先关注类型安全与边界条件，风格问题仅在影响可读性时提出。"
+    }
+  ],
+  "finalUser": "把上面几条工程约定整理成一段团队规范，之后的新项目默认照此执行。",
+  "mandatoryPoints": [
+    "新服务统一使用 TypeScript 并启用 strict 模式",
+    "包管理器为 pnpm",
+    "monorepo 工具为 Nx",
+    "评审优先关注类型安全与边界条件"
+  ],
+  "negativePoints": [
+    "yarn 迁移方案是备选讨论，不应被固化为当前约定",
+    "临时的风格讨论不应被提升为长期偏好"
+  ],
+  "rubrics": {
+    "l1": "L1 应包含上述工程偏好事实（TypeScript strict、pnpm、Nx、评审优先级），类型划分合理，且不包含负面点。",
+    "l2": "L2 场景应聚合工程协作主题，摘要覆盖主要偏好且不与其他主题混淆。",
+    "l3": "L3 人设应稳定表达工程偏好，可用于指导后续代码类回答。"
+  }
+}
