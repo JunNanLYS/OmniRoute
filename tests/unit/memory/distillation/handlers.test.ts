@@ -305,3 +305,89 @@ it("does not use an unresolved variable dynamic import for Tencent prompts", () 
     "variable prompt imports are statically resolved by Turbopack and emit Module-not-found warnings"
   );
 });
+
+describe("distillation/handlers — reasoning-aware per-kind max_tokens", () => {
+  // Reasoning models (e.g. deepseek-v4) spend the completion budget on
+  // hidden reasoning before the visible JSON: a live run measured 1448
+  // reasoning tokens for a six-message L1 extraction, so the old caps
+  // (2048/1024/512) truncated the answer to empty content. The per-kind
+  // caps no longer second-guess the model: they sit at 1,000,000 and the
+  // operator budget (MEMORY_DISTILLATION_MAX_TOKENS, default 131072) is the
+  // single effective knob. Provider ceilings still apply — DeepSeek accepts
+  // max_tokens up to 393216 (probed live; 1,000,000 is rejected with 400).
+  const reasoningReply = async () => ({
+    text: JSON.stringify([
+      {
+        scene_name: "preferences",
+        message_ids: [],
+        memories: [
+          { content: "Prefers dark mode", type: "persona", priority: 80, source_message_ids: [] },
+        ],
+      },
+    ]),
+    promptTokens: 10,
+    completionTokens: 5,
+  });
+
+  it("every kind passes the operator budget through untouched", async () => {
+    let requested = 0;
+    await DEFAULT_HANDLERS.L1_extract({
+      task: makeTask({ payload: { conversation: "user: hello" } }),
+      selection: { provider: "p", model: "m" },
+      budget: { maxTokens: 131072, maxSteps: 8, maxCalls: 12, maxDepth: 6 },
+      callModel: async (args) => {
+        requested = args.maxTokens;
+        return reasoningReply();
+      },
+    });
+    assert.equal(requested, 131072);
+  });
+
+  it("L2_scene and L3_persona also request the full budget", async () => {
+    let l2Requested = 0;
+    await DEFAULT_HANDLERS.L2_scene({
+      task: makeTask({ kind: "L2_scene", payload: { conversation: "work_fact: hello" } }),
+      selection: { provider: "p", model: "m" },
+      budget: { maxTokens: 131072, maxSteps: 8, maxCalls: 12, maxDepth: 6 },
+      callModel: async (args) => {
+        l2Requested = args.maxTokens;
+        return {
+          text: JSON.stringify({ summary: "s", tags: ["t"], content: "c", heat: 0.5 }),
+          promptTokens: 1,
+          completionTokens: 1,
+        };
+      },
+    });
+    assert.equal(l2Requested, 131072);
+
+    let l3Requested = 0;
+    await DEFAULT_HANDLERS.L3_persona({
+      task: makeTask({ kind: "L3_persona", payload: { samples: ["[scene]\nsum\ncontent"] } }),
+      selection: { provider: "p", model: "m" },
+      budget: { maxTokens: 131072, maxSteps: 8, maxCalls: 12, maxDepth: 6 },
+      callModel: async (args) => {
+        l3Requested = args.maxTokens;
+        return {
+          text: JSON.stringify({ content: "c", prompt_mode: "chat" }),
+          promptTokens: 1,
+          completionTokens: 1,
+        };
+      },
+    });
+    assert.equal(l3Requested, 131072);
+  });
+
+  it("still respects a smaller operator budget", async () => {
+    let requested = 0;
+    await DEFAULT_HANDLERS.L1_extract({
+      task: makeTask({ payload: { conversation: "user: hello" } }),
+      selection: { provider: "p", model: "m" },
+      budget: { maxTokens: 1024, maxSteps: 8, maxCalls: 12, maxDepth: 6 },
+      callModel: async (args) => {
+        requested = args.maxTokens;
+        return reasoningReply();
+      },
+    });
+    assert.equal(requested, 1024);
+  });
+});

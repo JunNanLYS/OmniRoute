@@ -10,7 +10,7 @@
  * for the memory management surface (selector), which always requires a
  * bearer subject.
  */
-import { httpJson, sleep } from "./http.ts";
+import { httpJson, pollUntil, sleep } from "./http.ts";
 import { MOCK_MODEL_ID } from "./mockUpstream.ts";
 import type { MemoryE2eLiveConfig } from "./config.ts";
 
@@ -289,6 +289,8 @@ export async function seedLiveTarget(options: {
   const syncResponse = await httpJson<{
     ok?: boolean;
     models?: Array<{ id?: string }>;
+    importedModels?: Array<{ id?: string }>;
+    syncedModels?: number;
     availableModelsCount?: number;
   }>(`${baseUrl}/api/providers/${encodeURIComponent(connectionId)}/sync-models`, {
     method: "POST",
@@ -299,16 +301,37 @@ export async function seedLiveTarget(options: {
       `live seed: model sync failed: HTTP ${syncResponse.status} ${JSON.stringify(syncResponse.body).slice(0, 300)}`
     );
   }
-  const discovered = (syncResponse.body.models ?? [])
+  // The sync response's `models` array carries locally persisted custom
+  // models only — real synced models may not be echoed there. Fall back to
+  // the effective selector, whose first_active tier resolves the first
+  // synced model from the live catalog.
+  const echoed = [
+    ...(Array.isArray(syncResponse.body.models) ? syncResponse.body.models : []),
+    ...(Array.isArray(syncResponse.body.importedModels) ? syncResponse.body.importedModels : []),
+  ]
     .map((model) => (typeof model.id === "string" ? model.id : null))
     .filter((id): id is string => Boolean(id));
-  const modelId = live.modelOverride ?? discovered[0];
+  let modelId = live.modelOverride ?? echoed[0];
   if (!modelId) {
-    throw new Error(
-      `live seed: sync returned no models and MEMORY_E2E_LIVE_MODEL is unset (${JSON.stringify(syncResponse.body).slice(0, 200)})`
+    const selector = await pollUntil(
+      async () => {
+        const effective = await httpJson<{ data?: { modelId?: string } }>(
+          `${baseUrl}/api/memory/distillation-model`,
+          { bearer: management.key }
+        );
+        return effective.body.data?.modelId ? effective.body.data : null;
+      },
+      {
+        timeoutMs: 30_000,
+        intervalMs: 1_000,
+        label: "live catalog to expose a synced model",
+      }
     );
+    modelId = selector.modelId!;
   }
-  push(`live model: ${modelId}${live.modelOverride ? " (env override)" : " (discovered)"}`);
+  push(
+    `live model: ${modelId}${live.modelOverride ? " (env override)" : echoed[0] ? " (sync echo)" : " (first_active)"}`
+  );
 
   const selectorPut = await httpJson(`${baseUrl}/api/memory/distillation-model`, {
     method: "PUT",

@@ -304,7 +304,7 @@ export const L1ExtractHandler: DistillationHandler = defineHandler(
         { role: "system", content: systemPrompt },
         { role: "user", content: conversation },
       ],
-      maxTokens: Math.min(2048, args.budget.maxTokens),
+      maxTokens: Math.min(1_000_000, args.budget.maxTokens),
     });
 
     const parsed = safeParseJson(response.text);
@@ -352,7 +352,7 @@ export const L2SceneHandler: DistillationHandler = defineHandler(
         { role: "system", content: systemPrompt },
         { role: "user", content: conversation },
       ],
-      maxTokens: Math.min(1024, args.budget.maxTokens),
+      maxTokens: Math.min(1_000_000, args.budget.maxTokens),
     });
     const parsed = safeParseJson(response.text);
     if (!parsed || typeof parsed !== "object") {
@@ -424,7 +424,7 @@ export const L3PersonaHandler: DistillationHandler = defineHandler(
         { role: "system", content: systemPrompt },
         { role: "user", content: samples.join("\n---\n") },
       ],
-      maxTokens: Math.min(512, args.budget.maxTokens),
+      maxTokens: Math.min(1_000_000, args.budget.maxTokens),
     });
     const parsed = safeParseJson(response.text);
     if (!parsed || typeof parsed !== "object") {
@@ -486,7 +486,7 @@ export const L0ChunkEmbedHandler: DistillationHandler = defineHandler(
         { role: "system", content: systemPrompt },
         { role: "user", content: chunk },
       ],
-      maxTokens: Math.min(256, args.budget.maxTokens),
+      maxTokens: Math.min(1_000_000, args.budget.maxTokens),
     });
     const parsed = safeParseJson(response.text);
     const summary =
