@@ -518,6 +518,7 @@ async function executeRunTask(
               text: execution.result.text,
               promptTokens: execution.result.promptTokens,
               completionTokens: execution.result.completionTokens,
+              finishReason: execution.result.finishReason,
             };
           },
         }),

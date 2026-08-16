@@ -311,10 +311,9 @@ describe("distillation/handlers — reasoning-aware per-kind max_tokens", () => 
   // hidden reasoning before the visible JSON: a live run measured 1448
   // reasoning tokens for a six-message L1 extraction, so the old caps
   // (2048/1024/512) truncated the answer to empty content. The per-kind
-  // caps no longer second-guess the model: they sit at 1,000,000 and the
-  // operator budget (MEMORY_DISTILLATION_MAX_TOKENS, default 131072) is the
-  // single effective knob. Provider ceilings still apply — DeepSeek accepts
-  // max_tokens up to 393216 (probed live; 1,000,000 is rejected with 400).
+  // ceiling sits at the provider output limit (325k for v4-flash — 1M is its
+  // context limit, not output) and the operator budget
+  // (MEMORY_DISTILLATION_MAX_TOKENS, default 32768) is the effective knob.
   const reasoningReply = async () => ({
     text: JSON.stringify([
       {
@@ -389,5 +388,277 @@ describe("distillation/handlers — reasoning-aware per-kind max_tokens", () => 
       },
     });
     assert.equal(requested, 1024);
+  });
+});
+
+describe("distillation/handlers — truncation retry and diagnostics", () => {
+  const budget = { maxTokens: 1024, maxSteps: 8, maxCalls: 12, maxDepth: 6 };
+
+  const validL1 = () => ({
+    text: JSON.stringify([
+      {
+        scene_name: "preferences",
+        message_ids: [],
+        memories: [
+          { content: "Prefers dark mode", type: "persona", priority: 80, source_message_ids: [] },
+        ],
+      },
+    ]),
+    promptTokens: 10,
+    completionTokens: 5,
+    finishReason: "stop",
+  });
+
+  it("retries exactly once when the first completion is truncated (finish_reason=length)", async () => {
+    let calls = 0;
+    const out = await DEFAULT_HANDLERS.L1_extract({
+      task: makeTask({ payload: { conversation: "user: hello" } }),
+      selection: { provider: "p", model: "m" },
+      budget,
+      callModel: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return { text: "", promptTokens: 10, completionTokens: 1024, finishReason: "length" };
+        }
+        return validL1();
+      },
+    });
+    assert.equal(calls, 2);
+    assert.equal(out.ok, true);
+  });
+
+  it("does not retry a normally-finished completion", async () => {
+    let calls = 0;
+    const out = await DEFAULT_HANDLERS.L2_scene({
+      task: makeTask({ kind: "L2_scene", payload: { conversation: "work_fact: hello" } }),
+      selection: { provider: "p", model: "m" },
+      budget,
+      callModel: async () => {
+        calls += 1;
+        return {
+          text: JSON.stringify({ summary: "s", tags: ["t"], heat: 0.5 }),
+          promptTokens: 1,
+          completionTokens: 1,
+          finishReason: "stop",
+        };
+      },
+    });
+    assert.equal(calls, 1);
+    assert.equal(out.ok, true);
+  });
+
+  it("reports finish_reason and a response preview when truncation persists", async () => {
+    const out = await DEFAULT_HANDLERS.L1_extract({
+      task: makeTask({ payload: { conversation: "user: hello" } }),
+      selection: { provider: "p", model: "m" },
+      budget,
+      callModel: async () => ({
+        text: "sorry, let me think about\nthis differently instead",
+        promptTokens: 1,
+        completionTokens: 9,
+        finishReason: "length",
+      }),
+    });
+    assert.equal(out.ok, false);
+    if (!out.ok) {
+      assert.equal(out.error.kind, "parse_failed");
+      assert.match(out.error.message, /finish_reason=length/);
+      assert.match(out.error.message, /sorry, let me think about this differently/);
+    }
+  });
+
+  it("clamps absurd operator budgets to the provider output ceiling (325k)", async () => {
+    let requested = 0;
+    const out = await DEFAULT_HANDLERS.L1_extract({
+      task: makeTask({ payload: { conversation: "user: hello" } }),
+      selection: { provider: "p", model: "m" },
+      budget: { ...budget, maxTokens: 400_000 },
+      callModel: async (args) => {
+        requested = args.maxTokens;
+        return validL1();
+      },
+    });
+    assert.equal(out.ok, true);
+    assert.equal(requested, 325_000);
+  });
+});
+
+describe("distillation/handlers — tolerant L1/L2 normalization", () => {
+  const budget = { maxTokens: 1024, maxSteps: 8, maxCalls: 12, maxDepth: 6 };
+
+  it("accepts {scenes:[...]} wrapped L1 output", async () => {
+    const out = await DEFAULT_HANDLERS.L1_extract({
+      task: makeTask({ payload: { conversation: "user: hello" } }),
+      selection: { provider: "p", model: "m" },
+      budget,
+      callModel: async () => ({
+        text: JSON.stringify({
+          scenes: [
+            {
+              scene_name: "wrapped",
+              message_ids: [],
+              memories: [
+                { content: "Use pnpm", type: "instruction", priority: 70, source_message_ids: [] },
+              ],
+            },
+          ],
+        }),
+        promptTokens: 1,
+        completionTokens: 1,
+        finishReason: "stop",
+      }),
+    });
+    assert.equal(out.ok, true);
+    if (out.ok) {
+      const scenes = (out.result.payload as { scenes: Array<{ sceneName: string }> }).scenes;
+      assert.equal(scenes.length, 1);
+      assert.equal(scenes[0]!.sceneName, "wrapped");
+    }
+  });
+
+  it("maps string priority labels to the documented bands", async () => {
+    const out = await DEFAULT_HANDLERS.L1_extract({
+      task: makeTask({ payload: { conversation: "user: hello" } }),
+      selection: { provider: "p", model: "m" },
+      budget,
+      callModel: async () => ({
+        text: JSON.stringify([
+          {
+            scene_name: "labels",
+            message_ids: [],
+            memories: [
+              { content: "high item", type: "work_fact", priority: "high" },
+              { content: "low item", type: "work_fact", priority: "Low" },
+              { content: "odd item", type: "work_fact", priority: "urgent-ish" },
+            ],
+          },
+        ]),
+        promptTokens: 1,
+        completionTokens: 1,
+        finishReason: "stop",
+      }),
+    });
+    assert.equal(out.ok, true);
+    if (out.ok) {
+      const memories = (
+        out.result.payload as {
+          scenes: Array<{ memories: Array<{ priority: number; content: string }> }>;
+        }
+      ).scenes[0]!.memories;
+      const byContent = new Map(memories.map((m) => [m.content, m.priority]));
+      assert.equal(byContent.get("high item"), 80);
+      assert.equal(byContent.get("low item"), 30);
+      assert.equal(byContent.get("odd item"), 50);
+    }
+  });
+
+  it("accepts L2 output that only fills content (summary and tags empty)", async () => {
+    const out = await DEFAULT_HANDLERS.L2_scene({
+      task: makeTask({ kind: "L2_scene", payload: { conversation: "work_fact: hello" } }),
+      selection: { provider: "p", model: "m" },
+      budget,
+      callModel: async () => ({
+        text: JSON.stringify({ summary: "", tags: [], content: "work_fact: hello" }),
+        promptTokens: 1,
+        completionTokens: 1,
+        finishReason: "stop",
+      }),
+    });
+    assert.equal(out.ok, true);
+  });
+
+  it("still fails L2 when summary, tags, and content are all empty", async () => {
+    const out = await DEFAULT_HANDLERS.L2_scene({
+      task: makeTask({ kind: "L2_scene", payload: { conversation: "work_fact: hello" } }),
+      selection: { provider: "p", model: "m" },
+      budget,
+      callModel: async () => ({
+        text: JSON.stringify({ summary: "", tags: [] }),
+        promptTokens: 1,
+        completionTokens: 1,
+        finishReason: "stop",
+      }),
+    });
+    assert.equal(out.ok, false);
+    if (!out.ok) {
+      assert.equal(out.error.kind, "semantic_invalid");
+      assert.match(out.error.message, /empty result/);
+    }
+  });
+});
+
+describe("distillation/handlers — grounding prompt contract", () => {
+  const budget = { maxTokens: 1024, maxSteps: 8, maxCalls: 12, maxDepth: 6 };
+
+  async function captureSystemPrompt(
+    run: (callModel: HandlerCallArgsLike["callModel"]) => Promise<unknown>,
+    fallbackText: string
+  ): Promise<string> {
+    let system = "";
+    await run(async (args) => {
+      system = args.messages[0]?.content ?? "";
+      return {
+        text: fallbackText,
+        promptTokens: 1,
+        completionTokens: 1,
+        finishReason: "stop",
+      };
+    });
+    return system;
+  }
+
+  type HandlerCallArgsLike = Parameters<typeof DEFAULT_HANDLERS.L1_extract>[0];
+
+  it("L1 prompt carries language policy, durability bar, and the id line format", async () => {
+    const system = await captureSystemPrompt(
+      (callModel) =>
+        DEFAULT_HANDLERS.L1_extract({
+          task: makeTask({ payload: { conversation: "user: hello" } }),
+          selection: { provider: "p", model: "m" },
+          budget,
+          callModel,
+        }),
+      "[]"
+    );
+    assert.match(system, /Extract durable memories/);
+    assert.match(system, /same language as the conversation's user messages/);
+    assert.match(system, /Only user-side information counts/);
+    assert.match(system, /\[message-id\] role: content/);
+    assert.match(system, /persona/);
+    assert.match(system, /work_artifact/);
+  });
+
+  it("L2 prompt forbids invented events and meta-commentary", async () => {
+    const system = await captureSystemPrompt(
+      (callModel) =>
+        DEFAULT_HANDLERS.L2_scene({
+          task: makeTask({ kind: "L2_scene", payload: { conversation: "work_fact: hello" } }),
+          selection: { provider: "p", model: "m" },
+          budget,
+          callModel,
+        }),
+      JSON.stringify({ summary: "s", tags: [], heat: 0.5 })
+    );
+    assert.match(system, /Update one durable scene/);
+    assert.match(system, /inventing events, meetings, decisions/);
+    assert.match(system, /no memories supplied/);
+    assert.match(system, /same language as the supplied memories/);
+  });
+
+  it("L3 prompt enforces scene-only grounding and the length cap", async () => {
+    const system = await captureSystemPrompt(
+      (callModel) =>
+        DEFAULT_HANDLERS.L3_persona({
+          task: makeTask({ kind: "L3_persona", payload: { samples: ["[scene]\nsum"] } }),
+          selection: { provider: "p", model: "m" },
+          budget,
+          callModel,
+        }),
+      JSON.stringify({ content: "c", prompt_mode: "chat" })
+    );
+    assert.match(system, /Synthesize the supplied scenes/);
+    assert.match(system, /directly supported by the supplied scenes/);
+    assert.match(system, /under 2000 characters/);
+    assert.match(system, /a rejected option stays rejected/);
   });
 });

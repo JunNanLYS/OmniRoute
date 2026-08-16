@@ -27,7 +27,12 @@ export interface HandlerCallArgs {
   callModel: (args: {
     messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
     maxTokens: number;
-  }) => Promise<{ text: string; promptTokens: number; completionTokens: number }>;
+  }) => Promise<{
+    text: string;
+    promptTokens: number;
+    completionTokens: number;
+    finishReason?: string;
+  }>;
   budget: {
     maxTokens: number;
     maxSteps: number;
@@ -113,6 +118,43 @@ function capMessages(
 }
 void capMessages;
 
+/**
+ * Provider output ceiling for the max_tokens request field. v4-flash accepts
+ * up to ~325k output tokens (1M context); operators stay far below via
+ * MEMORY_DISTILLATION_MAX_TOKENS, so this only clamps absurd budgets.
+ */
+const MAX_OUTPUT_TOKENS_CEILING = 325_000;
+
+function clampMaxTokens(budgetMaxTokens: number): number {
+  return Math.min(MAX_OUTPUT_TOKENS_CEILING, Math.max(1, Math.floor(budgetMaxTokens)));
+}
+
+type ModelCallMessages = Array<{ role: "system" | "user" | "assistant"; content: string }>;
+
+/**
+ * Single compliance retry for truncated completions. Reasoning models can
+ * burn the entire completion budget on hidden reasoning (finish_reason
+ * "length", empty content) before emitting any JSON — measured live on
+ * deepseek-v4-flash with identical input succeeding and failing across
+ * draws. One redraw at the same budget is cheap insurance and does not
+ * touch the run-level no-retry policy (the retry is inside one handler
+ * execution, within budget.maxCalls).
+ */
+async function callModelWithLengthRetry(
+  args: HandlerCallArgs,
+  messages: ModelCallMessages,
+  maxTokens: number
+): Promise<Awaited<ReturnType<HandlerCallArgs["callModel"]>>> {
+  const first = await args.callModel({ messages, maxTokens });
+  if (first.finishReason !== "length") return first;
+  return args.callModel({ messages, maxTokens });
+}
+
+/** Flattened, length-capped response preview for error messages (DLQ evidence). */
+function responsePreview(raw: string): string {
+  return raw.replace(/\s+/g, " ").trim().slice(0, 160);
+}
+
 const VALID_L1_TYPES: ReadonlySet<string> = new Set(L1_TYPES);
 const L1_TYPE_ALIASES: Readonly<Record<string, L1Type>> = {
   episode: "episodic",
@@ -154,10 +196,28 @@ function normalizeL1Type(value: unknown): L1Type | null {
   return L1_TYPE_ALIASES[normalized] ?? null;
 }
 
+/**
+ * Priority labels emitted by some models instead of numbers ("high", ...).
+ * Mapped to the documented bands; anything unrecognized falls back to 50.
+ */
+const PRIORITY_LABELS: Readonly<Record<string, number>> = {
+  critical: 95,
+  highest: 95,
+  high: 80,
+  medium: 60,
+  normal: 50,
+  low: 30,
+  lowest: 15,
+};
+
 function normalizePriority(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.min(100, Math.max(0, Math.round(value)))
-    : 50;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.min(100, Math.max(0, Math.round(value)));
+  }
+  if (typeof value === "string") {
+    return PRIORITY_LABELS[value.trim().toLowerCase()] ?? 50;
+  }
+  return 50;
 }
 
 function normalizeMemory(value: unknown): ExtractedL1Memory | null {
@@ -177,6 +237,8 @@ function normalizeMemory(value: unknown): ExtractedL1Memory | null {
 
 function normalizeL1Scenes(parsed: unknown): ExtractedL1Scene[] {
   const legacy = asRecord(parsed);
+  // Top-level array is canonical; models occasionally wrap the same payload
+  // in {scenes: [...]} (or the legacy {facts: [...]}) — all three accepted.
   const rawScenes = Array.isArray(parsed)
     ? parsed
     : Array.isArray(legacy?.facts)
@@ -186,7 +248,9 @@ function normalizeL1Scenes(parsed: unknown): ExtractedL1Scene[] {
             memories: legacy.facts,
           },
         ]
-      : [];
+      : Array.isArray(legacy?.scenes)
+        ? legacy.scenes
+        : [];
   const scenes: ExtractedL1Scene[] = [];
   for (const rawScene of rawScenes) {
     const scene = asRecord(rawScene);
@@ -253,31 +317,85 @@ function regexFallback(raw: string): Array<{ kind: string; match: string }> {
 async function loadTencentPrompt(kind: string): Promise<string> {
   // Inline prompts are intentional: the former variable dynamic import pointed to
   // a non-existent path/export and caused Turbopack Module-not-found warnings.
-  // Keep these protocol-matched fallbacks until explicit Tencent prompt adapters
-  // are wired with compatible input and output contracts.
+  //
+  // The prompt contracts below follow the validated design of the reference
+  // MemoryCore system (D:\Project\TencentDB-Agent-Memory\MemoryCore): explicit
+  // output-language policy, per-type definitions with priority bands, a
+  // durability bar (prefer fewer, better memories), and strict anti-hallucination
+  // grounding. The opening phrase of each prompt doubles as the classification
+  // marker for the smoke-harness mock upstream (`classifyMockCall`) — keep them
+  // stable: "Extract durable memories", "Update one durable scene",
+  // "Synthesize the supplied scenes".
   switch (kind) {
     case "L1_extract":
       return [
-        "Extract durable memories from the conversation.",
-        "Output a strict JSON array of scenes. Each scene has scene_name, message_ids, and memories.",
-        "Each memory has content, type, priority, source_message_ids, and metadata.",
-        `Allowed types: ${L1_TYPES.join("|")}. No prose.`,
+        "Extract durable memories from the conversation for a long-term agent memory system.",
+        "",
+        "Language: write scene_name and memory content in the same language as the conversation's user messages; keep JSON keys, type values, and field names in English.",
+        "",
+        "Durability bar — prefer fewer, better memories:",
+        "- Extract only information that stays true outside this conversation: standing preferences, identity, decisions, constraints, project facts, task states, ways of working.",
+        '- Drop transient one-off requests ("this time", "this order"), small talk, temporary states (e.g. being sick today), stage metrics (story points, alert counts), and anything the user says not to remember.',
+        "- Never record the assistant's own replies or behavior — what the assistant said, did, asked for, or failed to do is not a memory. Only user-side information counts.",
+        "- Never invent or infer facts: suggestions and hypotheses are not decisions; only confirmed statements become memories.",
+        "- Merge strongly related statements into one complete memory instead of fragments.",
+        "",
+        `Types (exactly one per memory): ${L1_TYPES.join("|")}.`,
+        "- persona: stable user attributes — identity, role, skills, values, habits.",
+        "- episodic: objective events or plans — what happened or was decided, with time and place when stated.",
+        "- instruction: standing rules the user set for the assistant — format, tone, workflow.",
+        "- work_fact: stable project or organization facts — ownership, relations, deadlines, tooling choices.",
+        "- work_task: task or project state — goal, owner, status, next step.",
+        "- work_method: reusable ways of working — SOPs, principles, constraints, anti-patterns.",
+        "- work_artifact: durable artifacts — docs, repos, branches, designs.",
+        "",
+        "priority: integer 0-100 — 80-100 hard constraints and critical facts, 50-79 normal, below 50 minor (prefer dropping instead).",
+        "",
+        'Conversation lines are formatted "[message-id] role: content". Use those bracketed ids verbatim for message_ids and source_message_ids.',
+        "",
+        "Scenes: group the conversation into one or more topics; name each scene concisely by what the user is doing there. Scene names must be unique within the response.",
+        "",
+        "Output ONLY a valid JSON array — no markdown fences, no prose:",
+        '[{"scene_name":"...","message_ids":["..."],"memories":[{"content":"...","type":"persona","priority":80,"source_message_ids":["..."],"metadata":{}}]}]',
+        "Return [] when nothing durable exists.",
       ].join("\n");
     case "L2_scene":
       return [
-        "Update one durable scene from the supplied memories and existing scene context.",
-        "Output JSON: { summary, tags: [string], content, heat, persona_update_requested }.",
-        "heat must be a number from 0 to 1. No prose.",
+        'Update one durable scene record for a long-term agent memory system. The input lists the memories that belong to this scene as "type: content" lines.',
+        "",
+        "Language: write summary, content, and tags in the same language as the supplied memories; keep JSON keys in English.",
+        "",
+        "Field contract:",
+        '- summary: a compact, specific digest that preserves the concrete facts — rules, owners, deadlines, choices, and numbers that are constraints. Never write vague meta like "rules were reaffirmed" — name the rules.',
+        "- content: optional structured notes (short lines) restating the same facts; no new information.",
+        "- tags: up to 8 short topic tags.",
+        "- heat: number from 0 to 1 — 0.3-0.5 occasional, around 0.7 active, 0.9 recurring and central.",
+        "- persona_update_requested: true only when these memories reveal a stable user trait that belongs in the persona layer.",
+        "",
+        'Strictly forbidden: inventing events, meetings, decisions, people, numbers, or narratives that are not in the supplied memories; storytelling or fiction; meta-commentary about the input (e.g. "no memories supplied"); contradicting or reinterpreting the supplied facts.',
+        "",
+        "Output ONLY JSON — no markdown fences, no prose:",
+        '{"summary":"...","tags":["..."],"content":"...","heat":0.5,"persona_update_requested":false}',
       ].join("\n");
     case "L3_persona":
       return [
-        "Synthesize the supplied scenes into durable persona or operating-doctrine content.",
-        "Output JSON: { content, prompt_mode }. No prose.",
+        "Synthesize the supplied scenes into one durable persona / operating-doctrine document for a long-term agent memory system.",
+        "",
+        "Language: write content in the same language as the supplied scenes; keep JSON keys in English.",
+        "",
+        "Grounding rules — strict:",
+        "- Every statement must be directly supported by the supplied scenes. Anything the scenes do not mention must not appear: no invented details, tools, examples, or generic engineering clichés.",
+        "- Cold-start restraint: when the scenes carry little information, a short persona is correct — do not pad.",
+        "- Preserve hard constraints and decisions exactly as stated; never soften, flip, or reinterpret them (a rejected option stays rejected; a superseded rule stays superseded).",
+        "- Keep the document under 2000 characters. Prefer a few structured sections over prose.",
+        "",
+        "Output ONLY JSON — no markdown fences, no prose:",
+        '{"content":"...","prompt_mode":"chat"}',
       ].join("\n");
     case "L0_chunk_embed":
       return [
-        "You summarise a chunk in <120 chars for vector recall.",
-        "Output JSON: { summary }.",
+        "Summarise a chunk for vector recall in under 120 characters, in the same language as the chunk.",
+        'Output ONLY JSON: {"summary":"..."}.',
       ].join("\n");
     default:
       return "Output strict JSON.";
@@ -299,19 +417,26 @@ export const L1ExtractHandler: DistillationHandler = defineHandler(
       return { ok: false, error: { kind: "budget_exceeded", message: "Input exceeds budget" } };
 
     const systemPrompt = await loadTencentPrompt("L1_extract");
-    const response = await args.callModel({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: conversation },
-      ],
-      maxTokens: Math.min(1_000_000, args.budget.maxTokens),
-    });
+    const messages: ModelCallMessages = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: conversation },
+    ];
+    const response = await callModelWithLengthRetry(
+      args,
+      messages,
+      clampMaxTokens(args.budget.maxTokens)
+    );
 
     const parsed = safeParseJson(response.text);
     if (!parsed || typeof parsed !== "object") {
       return {
         ok: false,
-        error: { kind: "parse_failed", message: "L1_extract: response was not JSON" },
+        error: {
+          kind: "parse_failed",
+          message: `L1_extract: response was not JSON (finish_reason=${
+            response.finishReason ?? "unknown"
+          }; response="${responsePreview(response.text)}")`,
+        },
       };
     }
     const scenes = normalizeL1Scenes(parsed);
@@ -347,18 +472,25 @@ export const L2SceneHandler: DistillationHandler = defineHandler(
       return { ok: false, error: { kind: "budget_exceeded", message: "Input exceeds budget" } };
 
     const systemPrompt = await loadTencentPrompt("L2_scene");
-    const response = await args.callModel({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: conversation },
-      ],
-      maxTokens: Math.min(1_000_000, args.budget.maxTokens),
-    });
+    const messages: ModelCallMessages = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: conversation },
+    ];
+    const response = await callModelWithLengthRetry(
+      args,
+      messages,
+      clampMaxTokens(args.budget.maxTokens)
+    );
     const parsed = safeParseJson(response.text);
     if (!parsed || typeof parsed !== "object") {
       return {
         ok: false,
-        error: { kind: "parse_failed", message: "L2_scene: response was not JSON" },
+        error: {
+          kind: "parse_failed",
+          message: `L2_scene: response was not JSON (finish_reason=${
+            response.finishReason ?? "unknown"
+          }; response="${responsePreview(response.text)}")`,
+        },
       };
     }
     const parsedRecord = parsed as Record<string, unknown>;
@@ -379,13 +511,23 @@ export const L2SceneHandler: DistillationHandler = defineHandler(
     ) {
       return {
         ok: false,
-        error: { kind: "semantic_invalid", message: "L2_scene: heat must be in 0..1" },
+        error: {
+          kind: "semantic_invalid",
+          message: `L2_scene: heat must be in 0..1 (got ${JSON.stringify(heat)})`,
+        },
       };
     }
-    if (!summary && tags.length === 0) {
+    // `content` counts as a valid payload: models that pour everything into
+    // the content field (leaving summary/tags empty) used to be failed here.
+    if (!summary && tags.length === 0 && !content) {
       return {
         ok: false,
-        error: { kind: "semantic_invalid", message: "L2_scene: empty result" },
+        error: {
+          kind: "semantic_invalid",
+          message: `L2_scene: empty result (finish_reason=${
+            response.finishReason ?? "unknown"
+          }; response="${responsePreview(response.text)}")`,
+        },
       };
     }
     return {
@@ -419,18 +561,25 @@ export const L3PersonaHandler: DistillationHandler = defineHandler(
       return { ok: false, error: { kind: "model_unset", message: "No persona samples" } };
     }
     const systemPrompt = await loadTencentPrompt("L3_persona");
-    const response = await args.callModel({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: samples.join("\n---\n") },
-      ],
-      maxTokens: Math.min(1_000_000, args.budget.maxTokens),
-    });
+    const messages: ModelCallMessages = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: samples.join("\n---\n") },
+    ];
+    const response = await callModelWithLengthRetry(
+      args,
+      messages,
+      clampMaxTokens(args.budget.maxTokens)
+    );
     const parsed = safeParseJson(response.text);
     if (!parsed || typeof parsed !== "object") {
       return {
         ok: false,
-        error: { kind: "parse_failed", message: "L3_persona: response was not JSON" },
+        error: {
+          kind: "parse_failed",
+          message: `L3_persona: response was not JSON (finish_reason=${
+            response.finishReason ?? "unknown"
+          }; response="${responsePreview(response.text)}")`,
+        },
       };
     }
     const parsedRecord = parsed as Record<string, unknown>;
@@ -481,13 +630,15 @@ export const L0ChunkEmbedHandler: DistillationHandler = defineHandler(
       return { ok: false, error: { kind: "model_unset", message: "No chunk" } };
     }
     const systemPrompt = await loadTencentPrompt("L0_chunk_embed");
-    const response = await args.callModel({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: chunk },
-      ],
-      maxTokens: Math.min(1_000_000, args.budget.maxTokens),
-    });
+    const messages: ModelCallMessages = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: chunk },
+    ];
+    const response = await callModelWithLengthRetry(
+      args,
+      messages,
+      clampMaxTokens(args.budget.maxTokens)
+    );
     const parsed = safeParseJson(response.text);
     const summary =
       parsed &&
@@ -498,7 +649,12 @@ export const L0ChunkEmbedHandler: DistillationHandler = defineHandler(
     if (!summary) {
       return {
         ok: false,
-        error: { kind: "parse_failed", message: "L0_chunk_embed: response was not JSON" },
+        error: {
+          kind: "parse_failed",
+          message: `L0_chunk_embed: response was not JSON (finish_reason=${
+            response.finishReason ?? "unknown"
+          }; response="${responsePreview(response.text)}")`,
+        },
       };
     }
     return {

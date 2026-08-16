@@ -21,7 +21,7 @@
  *   MEMORY_DISTILLATION_MAX_DEPTH       depth header cap (default 6)
  *   MEMORY_DISTILLATION_MAX_CALLS       call budget for nested loops (default 12)
  *   MEMORY_DISTILLATION_MAX_STEPS       executor step cap (default 8)
- *   MEMORY_DISTILLATION_MAX_TOKENS      per-task token cap (default 8192)
+ *   MEMORY_DISTILLATION_MAX_TOKENS      per-task token cap (default 32768)
  *   MEMORY_DISTILLATION_MODEL           provider/model override (`prov/model`)
  *   MEMORY_DISTILLATION_SECRET          process-local HMAC secret; auto-generated
  *                                        if absent. NOT a CLI override surface —
@@ -46,7 +46,12 @@ export const DEFAULT_DISTILLATION_CONCURRENCY = 3;
 export const DEFAULT_DISTILLATION_MAX_DEPTH = 6;
 export const DEFAULT_DISTILLATION_MAX_CALLS = 12;
 export const DEFAULT_DISTILLATION_MAX_STEPS = 8;
-export const DEFAULT_DISTILLATION_MAX_TOKENS = 8192;
+// Reasoning models (e.g. deepseek-v4-flash) spend the completion budget on
+// hidden reasoning BEFORE any JSON: a live E2E run measured a task whose
+// reasoning alone hit the old 8192 cap (finish_reason=length, content="").
+// 32768 leaves ~4x headroom over the largest healthy completion measured
+// (~7.5k tokens) while staying far below the provider output ceiling.
+export const DEFAULT_DISTILLATION_MAX_TOKENS = 32768;
 export const DEFAULT_DISTILLATION_SECRET_BYTES = 32;
 
 declare global {

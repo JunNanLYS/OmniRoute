@@ -42,6 +42,13 @@ export interface ExecutorResult {
   text: string;
   promptTokens: number;
   completionTokens: number;
+  /**
+   * Upstream finish reason when the provider reports one (e.g. "stop",
+   * "length"). "length" means the completion was truncated — for reasoning
+   * models the whole budget can be consumed by hidden reasoning before any
+   * visible content, so callers use this to detect empty/truncated answers.
+   */
+  finishReason?: string;
   /** Per-1k cost in USD for prompt completion tokens (optional). */
   costPerKTokenIn?: number;
   costPerKTokenOut?: number;

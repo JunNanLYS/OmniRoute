@@ -85,8 +85,16 @@ function compareCursor(a: L0DistillationCursor, b: L0DistillationCursor): number
   return time !== 0 ? time : a.rowId - b.rowId;
 }
 
+/**
+ * Render a conversation slice for L1 extraction. Each line carries the L0
+ * message id in brackets so the model can ground `message_ids` /
+ * `source_message_ids` in real ids instead of fabricating placeholders
+ * ("m1", ...); the L1 prompt documents this exact format.
+ */
 function formatConversation(messages: readonly L0DistillationMessage[]): string {
-  return messages.map((message) => `${message.role}: ${message.content}`).join("\n");
+  return messages
+    .map((message) => `[${message.id}] ${message.role}: ${message.content}`)
+    .join("\n");
 }
 
 export function planPendingL1Task(input: {

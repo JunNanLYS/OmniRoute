@@ -94,6 +94,9 @@ test("first conversation schedules an executable L1 task after the warm-up delay
   assert.deepEqual(plan.payload.sourceMessageIds, ["l0-u-1", "l0-a-1"]);
   assert.equal(plan.payload.roundCount, 1);
   assert.equal(plan.coalesceNotBefore, "earliest");
+  // Conversation lines carry the real L0 message ids so the L1 prompt can
+  // ground message_ids/source_message_ids instead of fabricating them.
+  assert.equal(plan.payload.conversation, "[l0-u-1] user: user 1\n[l0-a-1] assistant: assistant 1");
 });
 
 test("after one completed run a single round resets to the 10 minute idle deadline", () => {

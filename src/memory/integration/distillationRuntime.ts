@@ -122,6 +122,12 @@ function extractResponseText(payload: JsonRecord): string {
   return "";
 }
 
+function extractFinishReason(payload: JsonRecord): string | undefined {
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  const choice = asRecord(choices[0]);
+  return typeof choice?.finish_reason === "string" ? choice.finish_reason : undefined;
+}
+
 function extractUsage(payload: JsonRecord): {
   promptTokens: number;
   completionTokens: number;
@@ -208,6 +214,7 @@ export function createProductionExecutorDeps(
       if (!payload) throw new Error("Distillation upstream returned invalid JSON");
       return {
         text: extractResponseText(payload),
+        finishReason: extractFinishReason(payload),
         ...extractUsage(payload),
       };
     },
