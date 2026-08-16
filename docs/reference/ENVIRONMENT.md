@@ -766,7 +766,7 @@ API key. See `docs/frameworks/MEMORY.md` for the architecture.
 | `MEMORY_DISTILLATION_MAX_DEPTH`      | `6`                    | Depth header cap for the distillation executor.                                                                                     |
 | `MEMORY_DISTILLATION_MAX_CALLS`      | `12`                   | Call budget for nested distillation loops.                                                                                          |
 | `MEMORY_DISTILLATION_MAX_STEPS`      | `8`                    | Executor step cap per distillation task.                                                                                            |
-| `MEMORY_DISTILLATION_MAX_TOKENS`     | `8192`                 | Per-task token cap for the distillation executor.                                                                                   |
+| `MEMORY_DISTILLATION_MAX_TOKENS`     | `32768`                | Per-task token cap for the distillation executor. Reasoning models spend this budget on hidden reasoning before the JSON, so it must exceed the largest expected reasoning + output total. |
 | `MEMORY_DISTILLATION_MODEL`          | _(unset → selector)_   | Override the distillation model as `provider/model` (also accepts `provider:model`). Unset → the selector chain picks the model.    |
 | `MEMORY_DISTILLATION_SECRET`         | _(auto-generated)_     | Optional process-local HMAC secret (≥16 chars) for internal distillation loopback auth. Auto-generated per process when unset.      |
 | `MEMORY_MIGRATIONS_DIR`              | _(bundled default)_    | Override the directory containing `memory.db` migrations. Unset → the bundled migrations under `src/memory/db/migrations/`.         |
