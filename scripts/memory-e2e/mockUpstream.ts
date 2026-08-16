@@ -49,12 +49,24 @@ export function classifyMockCall(body: unknown): MockCallKind {
   return "chat";
 }
 
-/** First two `user: ...` lines of a distillation conversation slice. */
+/**
+ * User-turn text lines from a distillation conversation slice. Production
+ * renders each line as "[message-id] role: content" (see `formatConversation`
+ * in `src/memory/integration/l1Scheduling.ts`); the bare "user: " form stays
+ * supported for hand-written fixtures in tests.
+ */
+const USER_LINE_RE = /^\[[^\]]+\] user: (.*)$/;
+
 function userLinesFromConversation(conversation: string): string[] {
   return conversation
     .split("\n")
-    .filter((line) => line.startsWith("user: "))
-    .map((line) => line.slice("user: ".length).trim())
+    .map((line) => {
+      const bracketed = line.match(USER_LINE_RE);
+      if (bracketed) return bracketed[1] ?? null;
+      return line.startsWith("user: ") ? line.slice("user: ".length) : null;
+    })
+    .filter((line): line is string => line !== null)
+    .map((line) => line.trim())
     .filter(Boolean);
 }
 

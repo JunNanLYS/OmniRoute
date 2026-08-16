@@ -135,13 +135,16 @@ async function executeFixture(
       timestampBase: Date.now() - 3_600_000,
     });
 
-    // Stage 2 — real gateway turn for finalUser (capture is async).
+    // Stage 2 — real gateway turn for finalUser (capture is async). The
+    // fixture history rides along so the model sees the context finalUser
+    // refers to; L0 capture only records the final user/assistant pair.
     const turn = await sendFinalUserTurn({
       baseUrl: server.baseUrl,
       apiKey: subject.key,
       model: seed.gatewayModel,
       sessionId,
       content: fixture.finalUser,
+      history: fixture.history,
     });
     if (!turn.correlationId) {
       return finish("fail", "gateway", ["gateway response missing X-Correlation-Id"]);

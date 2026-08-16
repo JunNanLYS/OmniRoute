@@ -238,6 +238,31 @@ test("mock L1 splits long conversations into two distinct scenes", async () => {
 
 // ── Live profile config ──────────────────────────────────────────────────────
 
+test("mock L1 derives scenes from production [message-id] conversation lines", async () => {
+  const mock = await import("../../scripts/memory-e2e/mockUpstream.ts");
+
+  // Production renders conversation lines as "[id] role: content" (see
+  // formatConversation in src/memory/integration/l1Scheduling.ts); the mock
+  // must keep deriving memories from the user turns in that format.
+  const production = [
+    "[l0-u-1] user: 团队约定所有新服务用 TypeScript strict。",
+    "[l0-a-1] assistant: 已记录。",
+    "[l0-u-2] user: 依赖统一用 pnpm。",
+    "[l0-a-2] assistant: 记下。",
+    "[l0-u-3] user: 整理一下。",
+    "[l0-a-3] assistant: 好。",
+  ].join("\n");
+  const scenes = JSON.parse(mock.buildMockAssistantText("l1", production)) as Array<{
+    scene_name: string;
+    memories: Array<{ content: string }>;
+  }>;
+  assert.equal(scenes.length, 1);
+  assert.ok(scenes[0]!.scene_name.includes("TypeScript"));
+  assert.ok(scenes[0]!.memories.some((memory) => memory.content.includes("pnpm")));
+  // The bracketed id must not leak into the derived memory content.
+  assert.ok(!scenes[0]!.memories.some((memory) => memory.content.includes("l0-u-")));
+});
+
 test("live profile resolves from env and fails fast without a provider key", async () => {
   const { resolveMemoryE2eConfig } = await import("../../scripts/memory-e2e/config.ts");
 
