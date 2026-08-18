@@ -1,33 +1,21 @@
 "use client";
 
-import { useState } from "react";
 import { useTranslations } from "next-intl";
-import Card from "@/shared/components/Card";
+import ConceptCard from "@/shared/components/ConceptCard";
 
 export default function QuotaConceptCard() {
   const t = useTranslations("quotaShare");
-  const [expanded, setExpanded] = useState(false);
 
   return (
-    <Card padding="md">
-      <button
-        type="button"
-        className="w-full flex items-center justify-between gap-2 cursor-pointer"
-        onClick={() => setExpanded((p) => !p)}
-        aria-expanded={expanded}
-      >
-        <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[20px] text-primary">info</span>
-          <span className="text-sm font-semibold text-text-main">{t("conceptTitle")}</span>
-        </div>
-        <span className="material-symbols-outlined text-[18px] text-text-muted">
-          {expanded ? "expand_less" : "expand_more"}
-        </span>
-      </button>
-
-      {expanded && (
-        <div className="mt-3 space-y-2 text-xs text-text-muted leading-relaxed">
-          <p>{t("conceptIntro")}</p>
+    <ConceptCard
+      icon="info"
+      iconClassName="bg-transparent p-0 text-primary"
+      title={t("conceptTitle")}
+      toggleLabel={t("conceptIntro")}
+      collapse="body"
+      defaultOpen={false}
+      details={
+        <div className="space-y-2">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
             <ConceptItem icon="balance" text={t("conceptFairShare")} />
             <ConceptItem icon="trending_up" text={t("conceptBorrowing")} />
@@ -45,8 +33,8 @@ export default function QuotaConceptCard() {
             />
           </div>
         </div>
-      )}
-    </Card>
+      }
+    />
   );
 }
 

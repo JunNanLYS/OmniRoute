@@ -1,7 +1,12 @@
 "use client";
 
 import SecurityTab from "../components/SecurityTab";
+import SettingsShell from "../components/SettingsShell";
 
 export default function SettingsSecurityPage() {
-  return <SecurityTab />;
+  return (
+    <SettingsShell>
+      <SecurityTab />
+    </SettingsShell>
+  );
 }

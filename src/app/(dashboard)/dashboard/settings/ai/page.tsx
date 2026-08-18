@@ -12,23 +12,26 @@ import SkillsTab from "../components/SkillsTab";
 import ModelsDevSyncTab from "../components/ModelsDevSyncTab";
 import UsageTokenBufferTab from "../components/UsageTokenBufferTab";
 import ModelCapabilityOverridesTab from "../components/ModelCapabilityOverridesTab";
+import SettingsShell from "../components/SettingsShell";
 
 export default function SettingsAiPage() {
   const t = useTranslations("settings");
   return (
-    <div className="space-y-6">
-      <p className="text-sm text-text-muted">{t("aiSettingsIntro")}</p>
-      <ThinkingBudgetTab />
-      <VisionBridgeSettingsTab />
-      <SystemPromptTab />
-      <ResponsesStatePolicyTab />
-      <UsageTokenBufferTab />
-      <CodexFastTierTab />
-      <CodexAutoPingTab />
-      <ClaudeFastModeTab />
-      <SkillsTab />
-      <ModelCapabilityOverridesTab />
-      <ModelsDevSyncTab />
-    </div>
+    <SettingsShell>
+      <div className="space-y-6">
+        <p className="text-sm text-text-muted">{t("aiSettingsIntro")}</p>
+        <ThinkingBudgetTab />
+        <VisionBridgeSettingsTab />
+        <SystemPromptTab />
+        <ResponsesStatePolicyTab />
+        <UsageTokenBufferTab />
+        <CodexFastTierTab />
+        <CodexAutoPingTab />
+        <ClaudeFastModeTab />
+        <SkillsTab />
+        <ModelCapabilityOverridesTab />
+        <ModelsDevSyncTab />
+      </div>
+    </SettingsShell>
   );
 }
