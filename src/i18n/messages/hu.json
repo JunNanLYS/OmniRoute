@@ -6996,6 +6996,7 @@
     "customPricingNote": "Egyes modelleknél felülbírálhatja az alapértelmezett árazást. Az egyéni felülbírálások elsőbbséget élveznek az automatikusan észlelt árképzéssel szemben.",
     "editPricing": "Árak szerkesztése",
     "viewFullDetails": "Teljes részletek megtekintése",
+    "themeBrand": "Márka",
     "themeCoral": "Korall",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

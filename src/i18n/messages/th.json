@@ -6996,6 +6996,7 @@
     "customPricingNote": "คุณสามารถแทนที่ราคาเริ่มต้นสำหรับรุ่นเฉพาะได้ การแทนที่แบบกำหนดเองจะมีลำดับความสำคัญมากกว่าการกำหนดราคาที่ตรวจพบอัตโนมัติ",
     "editPricing": "แก้ไขราคา",
     "viewFullDetails": "ดูรายละเอียดทั้งหมด",
+    "themeBrand": "แบรนด์",
     "themeCoral": "คอรัล",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

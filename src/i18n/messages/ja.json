@@ -6996,6 +6996,7 @@
     "customPricingNote": "特定のモデルのデフォルトの価格をオーバーライドできます。カスタム オーバーライドは、自動検出された価格設定よりも優先されます。",
     "editPricing": "価格の編集",
     "viewFullDetails": "詳細を表示",
+    "themeBrand": "ブランド",
     "themeCoral": "コーラル",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

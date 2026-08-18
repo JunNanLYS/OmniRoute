@@ -6996,6 +6996,7 @@
     "customPricingNote": "Puoi sostituire i prezzi predefiniti per modelli specifici. Le sostituzioni personalizzate hanno la priorità sui prezzi rilevati automaticamente.",
     "editPricing": "Modifica prezzi",
     "viewFullDetails": "Visualizza i dettagli completi",
+    "themeBrand": "Marca",
     "themeCoral": "Corallo",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

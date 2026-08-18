@@ -7018,6 +7018,7 @@
     "customPricingNote": "Można nadpisać domyślną wycenę dla określonych models. Niestandardowe nadpisania mają priorytet nad automatycznie wykrytą wyceną.",
     "editPricing": "Edytuj wycenę",
     "viewFullDetails": "Pokaż pełne szczegóły",
+    "themeBrand": "Marka",
     "themeCoral": "Koralowy",
     "adaptiveVolumeRouting": "Adaptacyjny routing wolumenowy",
     "adaptiveVolumeRoutingDesc": "Skaluj połączenia dynamicznie w oparciu o wolumen ładunku (payload) i ciśnienie przepustowości.",

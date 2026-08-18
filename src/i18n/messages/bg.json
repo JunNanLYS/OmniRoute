@@ -6996,6 +6996,7 @@
     "customPricingNote": "Можете да замените цените по подразбиране за конкретни модели. Персонализираните замени имат приоритет пред автоматично разпознатото ценообразуване.",
     "editPricing": "Редактиране на цените",
     "viewFullDetails": "Вижте пълните подробности",
+    "themeBrand": "Марка",
     "themeCoral": "Корал",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

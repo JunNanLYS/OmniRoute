@@ -1,16 +1,18 @@
 "use client";
 
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
-import { cn } from "@/shared/utils/cn";
+import Button, { type ButtonVariant } from "./Button";
 
 /**
- * AppleButton — pill-shaped button with spring press and three weights.
+ * AppleButton — @deprecated thin alias over Button.
  *
- * - press feedback is on `:active` (per Apple: "respond on pointer-down,
- *   not on release") and the cubic curve is critically damped so it
- *   reads as "weighted" rather than "snappy".
- * - Use `primary` sparingly; `secondary` and `tertiary` are the workhorses
- *   in a fluid interface.
+ * Button absorbed the Apple fluid-interface behaviors (spring press on
+ * pointer-down, brand primary material). Use Button directly:
+ *
+ *   <Button shape="pill" variant="secondary" icon={...}>…</Button>
+ *
+ * This alias is kept so existing call sites keep working unchanged;
+ * variant/size/icon props map 1:1 onto Button's API.
  */
 export type AppleButtonVariant = "primary" | "secondary" | "tertiary";
 export type AppleButtonSize = "sm" | "md" | "lg";
@@ -25,60 +27,26 @@ interface AppleButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   className?: string;
 }
 
-const sizeMap: Record<AppleButtonSize, string> = {
-  sm: "px-3 py-1.5 text-xs",
-  md: "px-4 py-2 text-sm",
-  lg: "px-5 py-2.5 text-[15px]",
-};
-
-const variantClass: Record<AppleButtonVariant, string> = {
-  primary: "apple-btn-primary",
-  secondary: "apple-btn-secondary",
-  tertiary: "apple-btn-tertiary",
+const variantMap: Record<AppleButtonVariant, ButtonVariant> = {
+  primary: "primary",
+  secondary: "secondary",
+  tertiary: "ghost",
 };
 
 const AppleButton = forwardRef<HTMLButtonElement, AppleButtonProps>(function AppleButton(
-  {
-    children,
-    variant = "secondary",
-    size = "md",
-    icon,
-    trailingIcon,
-    loading,
-    className,
-    disabled,
-    ...props
-  },
+  { variant = "secondary", size = "md", icon, trailingIcon, ...props },
   ref
 ) {
   return (
-    <button
+    <Button
       ref={ref}
-      type={props.type ?? "button"}
-      disabled={disabled || loading}
-      className={cn("apple-btn", variantClass[variant], sizeMap[size], className)}
+      shape="pill"
+      variant={variantMap[variant]}
+      size={size}
+      icon={icon}
+      iconRight={trailingIcon}
       {...props}
-    >
-      {loading ? (
-        <span
-          className="material-symbols-outlined text-current opacity-70"
-          style={{ fontSize: "1em" }}
-          aria-hidden
-        >
-          progress_activity
-        </span>
-      ) : icon ? (
-        <span className="inline-flex items-center" aria-hidden>
-          {icon}
-        </span>
-      ) : null}
-      {children && <span>{children}</span>}
-      {trailingIcon ? (
-        <span className="inline-flex items-center" aria-hidden>
-          {trailingIcon}
-        </span>
-      ) : null}
-    </button>
+    />
   );
 });
 

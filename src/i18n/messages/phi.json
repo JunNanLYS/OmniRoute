@@ -6996,6 +6996,7 @@
     "customPricingNote": "Maaari mong i-override ang default na pagpepresyo para sa mga partikular na modelo. Mas inuuna ang mga custom na override kaysa sa awtomatikong natukoy na pagpepresyo.",
     "editPricing": "I-edit ang Pagpepresyo",
     "viewFullDetails": "Tingnan ang Buong Detalye",
+    "themeBrand": "Tatak",
     "themeCoral": "Coral",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

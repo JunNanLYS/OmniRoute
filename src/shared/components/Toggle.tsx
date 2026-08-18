@@ -71,10 +71,10 @@ export default function Toggle({
         disabled={disabled}
         onClick={handleClick}
         className={cn(
-          "relative inline-flex shrink-0 cursor-pointer rounded-full",
-          "transition-colors duration-200 ease-in-out",
+          "group relative inline-flex shrink-0 cursor-pointer rounded-full",
+          "transition-colors duration-300 ease-[var(--ease-spring-critical)]",
           "border shadow-inner",
-          "focus:outline-none focus:ring-1 focus:ring-accent/30",
+          "focus:outline-none focus:ring-2 focus:ring-accent/20",
           checked ? "border-primary bg-primary" : "border-border bg-surface-2 dark:bg-white/20",
           sizes[size].track,
           disabled && "cursor-not-allowed"
@@ -84,7 +84,9 @@ export default function Toggle({
           aria-hidden="true"
           className={cn(
             "pointer-events-none inline-block rounded-full bg-white shadow-sm",
-            "transform transition duration-200 ease-in-out",
+            // Soft-overshoot spring on the thumb — a real switch carries a
+            // little momentum; it also stretches slightly while held.
+            "transition-transform duration-300 ease-[var(--ease-spring-soft)] group-active:scale-x-110",
             checked ? sizes[size].translate : "translate-x-0.5",
             sizes[size].thumb,
             "mt-0.5"

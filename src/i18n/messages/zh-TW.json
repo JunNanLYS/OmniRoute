@@ -6996,6 +6996,7 @@
     "customPricingNote": "你可以覆蓋特定模型的預設定價。自定義覆蓋會優先於自動檢測到的定價。",
     "editPricing": "編輯定價",
     "viewFullDetails": "檢視完整詳情",
+    "themeBrand": "品牌",
     "themeCoral": "珊瑚色",
     "adaptiveVolumeRouting": "自適應流量路由",
     "adaptiveVolumeRoutingDesc": "根據即時負載量和吞吐壓力，動態調整各提供者連線承載的流量。",

@@ -7119,6 +7119,7 @@
     "customPricingNote": "Bạn có thể ghi đè giá mặc định cho các mô hình cụ thể. Các ghi đè tùy chỉnh được ưu tiên hơn giá được tự động phát hiện.",
     "editPricing": "Chỉnh sửa giá",
     "viewFullDetails": "Xem chi tiết đầy đủ",
+    "themeBrand": "Thương hiệu",
     "themeCoral": "San hô",
     "adaptiveVolumeRouting": "Định tuyến lưu lượng thích ứng",
     "adaptiveVolumeRoutingDesc": "Tự động điều chỉnh số lượng kết nối dựa trên khối lượng dữ liệu tải và áp lực thông lượng.",

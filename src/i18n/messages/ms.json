@@ -6996,6 +6996,7 @@
     "customPricingNote": "Anda boleh mengatasi harga lalai untuk model tertentu. Penggantian tersuai diutamakan berbanding harga yang dikesan secara automatik.",
     "editPricing": "Edit Harga",
     "viewFullDetails": "Lihat Butiran Penuh",
+    "themeBrand": "Jenama",
     "themeCoral": "Koral",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

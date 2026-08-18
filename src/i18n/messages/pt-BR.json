@@ -7119,6 +7119,7 @@
     "customPricingNote": "Você pode sobrescrever preços padrão para modelos específicos. Sobrescritas personalizadas têm prioridade sobre preços detectados automaticamente.",
     "editPricing": "Editar Preços",
     "viewFullDetails": "Ver Detalhes Completos",
+    "themeBrand": "Marca",
     "themeCoral": "Coral",
     "adaptiveVolumeRouting": "Roteamento de Volume Adaptativo",
     "adaptiveVolumeRoutingDesc": "Escala conexões dinamicamente com base no volume e pressão na taxa de transferência.",

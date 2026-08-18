@@ -6996,6 +6996,7 @@
     "customPricingNote": "Ви можете змінити ціни за умовчанням для певних моделей. Спеціальні зміни мають пріоритет над автоматично визначеними цінами.",
     "editPricing": "Редагувати ціни",
     "viewFullDetails": "Переглянути повну інформацію",
+    "themeBrand": "Бренд",
     "themeCoral": "Корал",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

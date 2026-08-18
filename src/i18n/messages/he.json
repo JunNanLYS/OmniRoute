@@ -6996,6 +6996,7 @@
     "customPricingNote": "אתה יכול לעקוף את תמחור ברירת המחדל עבור דגמים ספציפיים. עקיפות מותאמות אישית מקבלות עדיפות על פני תמחור שזוהה אוטומטית.",
     "editPricing": "ערוך תמחור",
     "viewFullDetails": "צפה בפרטים המלאים",
+    "themeBrand": "מותג",
     "themeCoral": "אלמוג",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

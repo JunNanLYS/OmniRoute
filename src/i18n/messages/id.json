@@ -6996,6 +6996,7 @@
     "customPricingNote": "Anda dapat mengganti harga default untuk model tertentu. Penggantian khusus lebih diprioritaskan dibandingkan harga yang terdeteksi otomatis.",
     "editPricing": "Sunting Harga",
     "viewFullDetails": "Lihat Detail Lengkap",
+    "themeBrand": "Merek",
     "themeCoral": "Koral",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

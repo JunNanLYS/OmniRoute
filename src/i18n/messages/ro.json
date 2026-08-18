@@ -6996,6 +6996,7 @@
     "customPricingNote": "Puteți suprascrie prețurile implicite pentru anumite modele. Anulările personalizate au prioritate față de prețurile detectate automat.",
     "editPricing": "Editați prețul",
     "viewFullDetails": "Vezi detalii complete",
+    "themeBrand": "Marcă",
     "themeCoral": "Coral",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

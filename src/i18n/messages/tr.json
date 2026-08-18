@@ -6996,6 +6996,7 @@
     "customPricingNote": "Belirli modeller için varsayılan fiyatlandırmayı geçersiz kılabilirsiniz. Özel geçersiz kılmalar, otomatik algılanan fiyatlandırmaya göre öncelik kazanır.",
     "editPricing": "Fiyatlandırmayı Düzenle",
     "viewFullDetails": "Tüm Ayrıntıları Görüntüle",
+    "themeBrand": "Marka",
     "themeCoral": "Mercan",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

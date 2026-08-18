@@ -6996,6 +6996,7 @@
     "customPricingNote": "Du kan overstyre standardpriser for spesifikke modeller. Egendefinerte overstyringer prioriteres fremfor automatisk oppdagede priser.",
     "editPricing": "Rediger priser",
     "viewFullDetails": "Se alle detaljer",
+    "themeBrand": "Merke",
     "themeCoral": "Korall",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

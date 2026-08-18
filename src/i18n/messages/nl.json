@@ -6996,6 +6996,7 @@
     "customPricingNote": "U kunt de standaardprijzen voor specifieke modellen overschrijven. Aangepaste overschrijvingen hebben voorrang op automatisch gedetecteerde prijzen.",
     "editPricing": "Prijzen bewerken",
     "viewFullDetails": "Bekijk volledige details",
+    "themeBrand": "Merk",
     "themeCoral": "Koraal",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

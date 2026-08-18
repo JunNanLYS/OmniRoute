@@ -6996,6 +6996,7 @@
     "customPricingNote": "Výchozí ceny pro konkrétní modely můžete přepsat. Vlastní přepsání má přednost před automaticky zjištěnými cenami.",
     "editPricing": "Upravit ceny",
     "viewFullDetails": "Zobrazit všechny podrobnosti",
+    "themeBrand": "Značka",
     "themeCoral": "Korál",
     "adaptiveVolumeRouting": "Adaptivní objemové směrování",
     "adaptiveVolumeRoutingDesc": "Dynamické škálování připojení na základě objemu dat a propustnosti.",

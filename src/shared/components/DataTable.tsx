@@ -104,7 +104,7 @@ export default function DataTable({
       style={{
         overflow: "auto",
         maxHeight,
-        borderRadius: "8px",
+        borderRadius: "var(--radius-control)",
         // Opaque surface so the body grid wallpaper never bleeds through the
         // transparent even-rows / low-alpha zebra when the table renders card-less.
         background: "var(--color-surface)",
@@ -136,7 +136,7 @@ export default function DataTable({
                   whiteSpace: "nowrap",
                   fontSize: "11px",
                   textTransform: "uppercase",
-                  letterSpacing: "0.5px",
+                  letterSpacing: "0.06em",
                 }}
               >
                 {renderHeader ? renderHeader(col) : col.label}
@@ -157,7 +157,7 @@ export default function DataTable({
                     : idx % 2 === 0
                       ? "transparent"
                       : "var(--table-row-zebra)",
-                transition: "background 0.15s",
+                transition: "background-color 180ms cubic-bezier(0.22, 1, 0.36, 1)",
               }}
               onMouseEnter={(e) => {
                 if (row.id !== selectedId) {

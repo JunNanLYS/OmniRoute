@@ -205,7 +205,7 @@ export default function Header({
 
   return (
     <header
-      className="sticky top-0 z-10 flex items-center justify-between border-b border-black/5 bg-bg px-8 py-4 dark:border-white/5"
+      className="sticky top-0 z-10 flex items-center justify-between border-b border-black/[0.04] bg-bg/75 px-8 py-4 backdrop-blur-xl backdrop-saturate-150 dark:border-white/[0.04]"
       style={{
         paddingTop: isMacElectron ? "calc(1rem + var(--desktop-safe-top))" : undefined,
       }}
@@ -248,7 +248,7 @@ export default function Header({
             <button
               type="button"
               onClick={onOpenCommandPalette}
-              className="hidden md:inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-black/10 dark:border-white/10 bg-bg-subtle text-text-muted hover:text-text-main hover:bg-black/[0.04] dark:hover:bg-white/[0.04] transition-colors"
+              className="hidden md:inline-flex items-center gap-2 px-2.5 py-1.5 rounded-control border border-black/10 dark:border-white/10 bg-bg-subtle text-text-muted hover:text-text-main hover:bg-black/[0.04] dark:hover:bg-white/[0.04] transition-colors"
               title={t("quickNavigationTitle")}
               aria-label={t("openQuickNavigation")}
             >
@@ -274,7 +274,7 @@ export default function Header({
         {!isE2EMode && <TokenHealthBadge />}
         <button
           onClick={handleLogout}
-          className="flex items-center justify-center p-2 rounded-lg text-text-muted hover:text-red-500 hover:bg-red-500/10 transition-all"
+          className="flex items-center justify-center p-2 rounded-control text-text-muted hover:text-red-500 hover:bg-red-500/10 transition-colors"
           title={t("logout")}
           aria-label={t("logout")}
         >

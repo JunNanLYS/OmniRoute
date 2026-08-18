@@ -6996,6 +6996,7 @@
     "customPricingNote": "Você pode substituir o preço padrão de modelos específicos. As substituições personalizadas têm prioridade sobre os preços detectados automaticamente.",
     "editPricing": "Editar preços",
     "viewFullDetails": "Ver detalhes completos",
+    "themeBrand": "Marca",
     "themeCoral": "Coral",
     "adaptiveVolumeRouting": "Roteamento de Volume Adaptativo",
     "adaptiveVolumeRoutingDesc": "Escala conexões dinamicamente com base no volume e pressão na taxa de transferência.",

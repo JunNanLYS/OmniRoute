@@ -227,12 +227,12 @@ function CommandPaletteDialog({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[10vh] px-4">
       <div
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm apple-scrim-in"
         onClick={onClose}
         aria-hidden="true"
       />
       <div
-        className="relative w-full max-w-3xl bg-surface border border-black/10 dark:border-white/10 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+        className="relative w-full max-w-3xl glass-3 rounded-card apple-modal-in overflow-hidden"
         role="dialog"
         aria-modal="true"
         aria-label={t("commandPaletteAria")}

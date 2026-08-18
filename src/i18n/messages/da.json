@@ -6996,6 +6996,7 @@
     "customPricingNote": "Du kan tilsidesætte standardpriser for specifikke modeller. Tilpassede tilsidesættelser har prioritet frem for automatisk registrerede priser.",
     "editPricing": "Rediger prissætning",
     "viewFullDetails": "Se alle detaljer",
+    "themeBrand": "Mærke",
     "themeCoral": "Koral",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

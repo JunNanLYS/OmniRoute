@@ -6996,6 +6996,7 @@
     "customPricingNote": "Du kan åsidosätta standardpriser för specifika modeller. Anpassade åsidosättningar har prioritet framför automatiskt identifierade priser.",
     "editPricing": "Redigera prissättning",
     "viewFullDetails": "Visa fullständiga detaljer",
+    "themeBrand": "Varumärke",
     "themeCoral": "Korall",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

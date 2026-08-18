@@ -42,7 +42,7 @@ test("globals.css adds the shared identity tokens", () => {
   assert.match(globalsCss, /--radius:\s*14px/);
   assert.match(
     globalsCss,
-    /--grad-brand:\s*linear-gradient\(135deg,\s*var\(--color-primary\),\s*var\(--color-accent-light\)\)/
+    /--grad-brand:\s*linear-gradient\(135deg,\s*#7f1d1d 0%,\s*#991b1b 100%\)/
   );
   // exposed to Tailwind as bg-surface-2 for later phases
   assert.match(globalsCss, /--color-surface-2:\s*var\(--surface-2\)/);
@@ -72,7 +72,10 @@ test("globals.css exposes the semantic radius utilities", () => {
 
 test("Button uses the brand gradient + accent variant + control radius", () => {
   const button = read("../../src/shared/components/Button.tsx");
-  assert.match(button, /primary:\s*"bg-\[image:var\(--grad-brand\)\]/);
+  // primary delegates to .apple-btn-primary (single source of truth shared with
+  // the AppleButton alias); the class paints the --grad-brand gradient.
+  assert.match(button, /primary:\s*"apple-btn-primary/);
+  assert.match(globalsCss, /\.apple-btn-primary\s*\{[^}]*var\(--grad-brand\)/s);
   assert.match(button, /accent:\s*"bg-accent/);
   assert.ok(
     !button.includes("from-primary to-primary-hover"),
@@ -115,8 +118,13 @@ test("status colors come from one canonical module", () => {
   assert.ok(!badge.includes('"#22c55e"'), "TokenHealthBadge no longer hardcodes the success hex");
 });
 
-test("globals.css defines a monospace token (site parity)", () => {
-  assert.match(globalsCss, /--font-mono:\s*ui-monospace/);
+test("globals.css does NOT redeclare the next/font variables (font cascade guard)", () => {
+  // AGENTS.md "Font cascade": --font-sans / --font-mono are injected onto <body>
+  // by next/font. Redeclaring them in @theme inline makes the font-sans utility
+  // resolve to the system stack while body keeps Geist — the silent
+  // "font loads but isn't applied" bug. The variables must stay single-sourced.
+  assert.doesNotMatch(globalsCss, /--font-sans:\s*ui-sans-serif/);
+  assert.doesNotMatch(globalsCss, /--font-mono:\s*ui-monospace/);
 });
 
 test("DataTable is theme-aware via --table-* tokens (dark = the exact old values)", () => {
@@ -173,7 +181,7 @@ test("form controls focus on the accent ring, not the red primary", () => {
   assert.match(globalsCss, /--focus-ring:.*var\(--color-accent\)/);
   for (const name of ["Input", "Select", "Textarea", "Toggle", "Checkbox"]) {
     const src = read(`../../src/shared/components/${name}.tsx`);
-    assert.ok(/ring-accent\/30/.test(src), `${name} uses the accent focus ring`);
+    assert.ok(/ring-accent\/\d+/.test(src), `${name} uses the accent focus ring`);
     assert.ok(
       !/(?:focus|focus-visible):ring-primary\/30/.test(src),
       `${name} no longer uses the red primary focus ring`

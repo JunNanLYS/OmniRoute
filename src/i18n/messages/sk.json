@@ -6996,6 +6996,7 @@
     "customPricingNote": "Predvolené ceny pre konkrétne modely môžete prepísať. Vlastné prepísania majú prednosť pred automaticky zistenými cenami.",
     "editPricing": "Upraviť ceny",
     "viewFullDetails": "Zobraziť úplné podrobnosti",
+    "themeBrand": "Značka",
     "themeCoral": "Korál",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",

@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useRef } from "react";
 import { cn } from "@/shared/utils/cn";
 
 interface CardProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "title"> {
@@ -22,8 +23,10 @@ export default function Card({
   padding = "md",
   hover = false,
   className,
+  onMouseMove,
   ...props
 }: CardProps) {
+  const ref = useRef<HTMLDivElement | null>(null);
   const paddings = {
     none: "",
     xs: "p-3",
@@ -32,23 +35,44 @@ export default function Card({
     lg: "p-8",
   };
 
+  // Apple spotlight sweep — the ::before in `.apple-card-spotlight` paints a
+  // radial highlight under the content; only interactive cards track the pointer.
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (hover) {
+        const el = ref.current;
+        if (el) {
+          const r = el.getBoundingClientRect();
+          el.style.setProperty("--mx", `${e.clientX - r.left}px`);
+          el.style.setProperty("--my", `${e.clientY - r.top}px`);
+        }
+      }
+      onMouseMove?.(e);
+    },
+    [hover, onMouseMove]
+  );
+
   return (
     <div
+      ref={ref}
       className={cn(
-        "bg-surface",
-        "border border-border",
-        "rounded-card shadow-sm",
-        hover && "hover:shadow-md hover:border-primary/30 transition-all cursor-pointer",
+        // Material stays expressed as Tailwind utilities so tailwind-merge can
+        // still resolve consumer className overrides against them.
+        "bg-surface border border-border rounded-card shadow-soft",
+        "transition-[transform,box-shadow,border-color] duration-300 ease-[var(--ease-spring-critical)]",
+        hover &&
+          "apple-card-spotlight cursor-pointer hover:-translate-y-0.5 hover:shadow-elevated hover:border-primary/20 active:translate-y-0 active:scale-[0.995]",
         paddings[padding],
         className
       )}
+      onMouseMove={handleMouseMove}
       {...props}
     >
       {(title || action) && (
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
             {icon && (
-              <div className="p-2 rounded-lg bg-bg text-text-muted">
+              <div className="p-2 rounded-control bg-bg text-text-muted">
                 <span className="material-symbols-outlined text-[20px]">{icon}</span>
               </div>
             )}
@@ -74,7 +98,7 @@ Card.Section = function CardSection({ children, className, ...props }: CardSecti
   return (
     <div
       className={cn(
-        "p-4 rounded-lg",
+        "p-4 rounded-control",
         "bg-black/[0.02] dark:bg-white/[0.02]",
         "border border-border",
         className

@@ -130,22 +130,21 @@ export default function Modal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Overlay */}
       <div
-        className="absolute inset-0 bg-black/30 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/30 backdrop-blur-sm apple-scrim-in"
         onClick={closeOnOverlay ? onClose : undefined}
         aria-hidden="true"
       />
 
-      {/* Modal content */}
+      {/* Modal content — glass-3 (heaviest material = most structural floating
+          layer) with a spring materialization entrance. */}
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={title ? titleId : undefined}
         className={cn(
-          "relative w-full bg-surface",
-          "border border-black/10 dark:border-white/10",
-          "rounded-card shadow-2xl",
-          "animate-in fade-in zoom-in-95 duration-200",
+          "relative w-full glass-3 rounded-card",
+          "apple-modal-in",
           sizes[size],
           className
         )}

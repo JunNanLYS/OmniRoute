@@ -6996,6 +6996,7 @@
     "customPricingNote": "You can override default pricing for specific models. Custom overrides take priority over auto-detected pricing.",
     "editPricing": "Edit Pricing",
     "viewFullDetails": "View Full Details",
+    "themeBrand": "Merek",
     "themeCoral": "Coral",
     "adaptiveVolumeRouting": "Adaptive Volume Routing",
     "adaptiveVolumeRoutingDesc": "Scale connections dynamically based on payload volume and throughput pressure.",
