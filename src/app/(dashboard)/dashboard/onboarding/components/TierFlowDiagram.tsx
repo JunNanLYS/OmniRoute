@@ -1,15 +1,14 @@
 "use client";
 
-import { useTheme } from "next-themes";
+import { useTheme } from "@/shared/hooks/useTheme";
 import { useTranslations } from "next-intl";
 import Image from "next/image";
 
 export function TierFlowDiagram() {
   const t = useTranslations("onboarding.tier");
   const tOnboarding = useTranslations("onboarding");
-  const { resolvedTheme } = useTheme();
-  const src =
-    resolvedTheme === "dark" ? "/images/tier-flow-dark.svg" : "/images/tier-flow-light.svg";
+  const { isDark } = useTheme();
+  const src = isDark ? "/images/tier-flow-dark.svg" : "/images/tier-flow-light.svg";
 
   return (
     <div className="flex flex-col items-center gap-3 my-4">

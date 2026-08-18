@@ -182,8 +182,8 @@ const nextConfig = {
     // upstream provider finishes, so reuse the existing request-timeout knobs.
     proxyTimeout: readTimeoutMs(process.env.REQUEST_TIMEOUT_MS, process.env.FETCH_TIMEOUT_MS),
     // PR-2 of diegosouzapw/OmniRoute#3932: tree-shake barrel re-exports so
-    // route bundles don't pull in 14 locale files, every lucide-react icon,
-    // or the full date-fns surface when only one helper is used.
+    // route bundles don't pull in 14 locale files or the full date-fns
+    // surface when only one helper is used.
     //
     // NOTE: this list must only contain EXTERNAL barrel libraries. Do NOT add
     // the internal `@omniroute/open-sse` workspace here: optimizePackageImports
@@ -198,7 +198,6 @@ const nextConfig = {
     optimizePackageImports: [
       "lobehub/icons",
       "@lobehub/icons",
-      "lucide-react",
       "date-fns",
       "lodash",
       "lodash-es",
@@ -322,12 +321,6 @@ const nextConfig = {
         xyflow: {
           test: /[\\/]node_modules[\\/]@xyflow[\\/]/,
           name: "vendor-xyflow",
-          chunks: "all",
-          priority: 20,
-        },
-        mermaid: {
-          test: /[\\/]node_modules[\\/]mermaid[\\/]/,
-          name: "vendor-mermaid",
           chunks: "all",
           priority: 20,
         },
